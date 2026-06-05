@@ -1,0 +1,78 @@
+{
+  "expo": {
+    "name": "Smart Citizen",
+    "slug": "smart-citizen",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/smartcitizen.png",
+    "scheme": "Smart Citizen",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.ved.civicengagement"
+    },
+    "android": {
+      "package": "com.ved.civicengagement",
+      "googleServicesFile": "./google-services.json",
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyC_J29mrAmjAFOoUos65aMnH3_itnRNOqE"
+        }
+      },
+      "adaptiveIcon": {
+        "backgroundColor": "#000000",
+        "foregroundImage": "./assets/images/smartcitizen.png"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "output": "static",
+      "favicon": "./assets/images/favicon.png"
+    },
+    "plugins": [
+      "./plugins/withFixGradle",
+      "@react-native-firebase/app",
+      "@react-native-firebase/auth",
+      "expo-router",
+      "expo-location",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/smartcitizen.png",
+          "imageWidth": 220,
+          "resizeMode": "contain",
+          "backgroundColor": "#000000"
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "compileSdkVersion": 35,
+            "targetSdkVersion": 35,
+            "buildToolsVersion": "35.0.0",
+            "kotlinVersion": "2.1.0",
+            "enableProguardInReleaseBuilds": false,
+            "enableMinifyInReleaseBuilds": false
+          },
+          "ios": {
+            "deploymentTarget": "15.1"
+          }
+        }
+      ],
+      "expo-font"
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": false
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "54020fdd-ad6f-4bcb-9002-9bae10949b99"
+      }
+    }
+  }
+}

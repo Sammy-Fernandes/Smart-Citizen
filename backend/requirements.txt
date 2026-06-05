@@ -1,0 +1,17 @@
+ultralytics
+firebase-admin
+opencv-python-headless
+numpy
+requests
+python-dotenv
+redis
+redisvl
+sentence-transformers
+transformers
+torch
+fastapi
+uvicorn
+slowapi
+httpx
+Pillow
+pyngrok

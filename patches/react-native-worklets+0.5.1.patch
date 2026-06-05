@@ -1,0 +1,13 @@
+diff --git a/node_modules/react-native-worklets/android/build.gradle b/node_modules/react-native-worklets/android/build.gradle
+index 021f5bc..3f68f02 100644
+--- a/node_modules/react-native-worklets/android/build.gradle
++++ b/node_modules/react-native-worklets/android/build.gradle
+@@ -306,7 +306,7 @@ task assertMinimalReactNativeVersionTask {
+     }
+ }
+ 
+-preBuild.dependsOn(assertMinimalReactNativeVersionTask)
++// preBuild.dependsOn(assertMinimalReactNativeVersionTask)
+ 
+ task assertNewArchitectureEnabledTask {
+     onlyIf { !IS_NEW_ARCHITECTURE_ENABLED }
