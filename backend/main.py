@@ -538,6 +538,16 @@ class RealtimeRestWorker:
                     location=location
                 )
 
+                # Duplicate matching (location + visual similarity)
+                parent_id = self.find_duplicate_master(
+                    lat=location['latitude'],
+                    lon=location['longitude'],
+                    category=category,
+                    new_embedding=result.get('embedding'),
+                    image_urls=image_urls,
+                    exclude_doc_id=doc_id
+                )
+
                 payload = {
                     'verificationStatus': result['status'],
                     'verificationConfidence': float(result['confidence']),
@@ -548,11 +558,87 @@ class RealtimeRestWorker:
                     'aiProcessed': True
                 }
 
+                if result.get('embedding'):
+                    payload['visualEmbedding'] = result['embedding']
+
+                if parent_id:
+                    payload['parentId'] = parent_id
+                    print(f"🔗 [Realtime Worker] Linked report {doc_id} -> Parent Master: {parent_id}")
+
                 success = self.update_doc_fields(doc_id, payload)
                 if success:
                     print(f"✅ [Realtime Worker] Processed & updated report {doc_id} -> {result['status']} (Severity: {result.get('severity')})")
         except Exception as e:
             print(f"⚠️ [Realtime Worker] Loop error: {e}")
+
+    def find_duplicate_master(self, lat, lon, category, new_embedding, image_urls, exclude_doc_id):
+        token = self.get_id_token()
+        if not token: return None
+
+        url = f"https://firestore.googleapis.com/v1/projects/{self.project_id}/databases/(default)/documents/complaints"
+        headers = {'Authorization': f'Bearer {token}'}
+
+        try:
+            r = requests.get(url, headers=headers, timeout=10)
+            if r.status_code != 200: return None
+            documents = r.json().get('documents', [])
+
+            for doc in documents:
+                name = doc.get('name', '')
+                doc_id = name.split('/')[-1]
+                if doc_id == exclude_doc_id:
+                    continue
+
+                fields = doc.get('fields', {})
+                parent_id = fields.get('parentId', {}).get('stringValue', None)
+                if parent_id:
+                    continue
+
+                status = fields.get('status', {}).get('stringValue', '')
+                if status == 'resolved' or fields.get('verificationStatus', {}).get('stringValue', '') == 'rejected':
+                    continue
+
+                # 1. Exact Image Match
+                img_array = fields.get('imageUrls', {}).get('arrayValue', {}).get('values', [])
+                existing_imgs = [item.get('stringValue') for item in img_array if item.get('stringValue')]
+                if image_urls and existing_imgs and any(u in existing_imgs for u in image_urls):
+                    print(f"🔗 [Duplicate Match] Exact image match between {exclude_doc_id} and master {doc_id}")
+                    return doc_id
+
+                # 2. Location & Visual Similarity
+                loc_map = fields.get('location', {}).get('mapValue', {}).get('fields', {})
+                try:
+                    doc_lat = float(loc_map.get('latitude', {}).get('doubleValue', loc_map.get('latitude', {}).get('integerValue', 0)))
+                    doc_lon = float(loc_map.get('longitude', {}).get('doubleValue', loc_map.get('longitude', {}).get('integerValue', 0)))
+                except (ValueError, TypeError):
+                    continue
+
+                if doc_lat == 0 or doc_lon == 0 or lat == 0 or lon == 0:
+                    continue
+
+                dist = calculate_distance(lat, lon, doc_lat, doc_lon)
+
+                old_embed_values = fields.get('visualEmbedding', {}).get('arrayValue', {}).get('values', [])
+                old_embedding = [float(v.get('doubleValue', v.get('integerValue', 0))) for v in old_embed_values]
+
+                if new_embedding is not None and old_embedding and len(old_embedding) == len(new_embedding):
+                    import numpy as np
+                    dot = np.dot(new_embedding, old_embedding)
+                    norm_a = np.linalg.norm(new_embedding)
+                    norm_b = np.linalg.norm(old_embedding)
+                    similarity = dot / (norm_a * norm_b) if norm_a and norm_b else 0
+                    if dist < 250 and similarity >= 0.70:
+                        print(f"🔗 [Duplicate Match] Visual similarity {similarity:.2f} & dist {dist:.1f}m -> master {doc_id}")
+                        return doc_id
+
+                if dist < 50:
+                    print(f"🔗 [Duplicate Match] Proximity match ({dist:.1f}m) -> master {doc_id}")
+                    return doc_id
+
+        except Exception as e:
+            print(f"⚠️ Duplicate check error: {e}")
+
+        return None
 
     def start_loop(self):
         print("⚡ Real-time Firestore REST Worker active (Polling every 3s)...")
