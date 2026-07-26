@@ -640,7 +640,7 @@ export default function ComplaintsPage() {
                                         visited.add(current.id);
                                         path.push(current.id);
                                         const parent = complaints.find(x => x.id === current.parentId);
-                                        if (!parent) break;
+                                        if (!parent || parent.status !== current.status) break;
                                         current = parent;
                                     }
                                     return current.id;

@@ -766,13 +766,13 @@ class RealtimeRestWorker:
 
             patch_headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
 
-            # Cleanup stale cross-category parent links
+            # Cleanup stale cross-category or status-mismatched parent links
             doc_map = {d['doc_id']: d for d in parsed_docs}
             for d in parsed_docs:
                 if d['parent_id'] and d['parent_id'] in doc_map:
                     parent_doc = doc_map[d['parent_id']]
-                    if parent_doc['norm_cat'] != d['norm_cat']:
-                        print(f"🧹 [Cleanup Stale Link] Unlinking {d['doc_id']} ('{d['title']}', Cat: {d['norm_cat']}) from mismatched Master {parent_doc['doc_id']} ('{parent_doc['title']}', Cat: {parent_doc['norm_cat']})")
+                    if parent_doc['norm_cat'] != d['norm_cat'] or parent_doc['status'] != d['status'] or d['status'] == 'resolved' or parent_doc['status'] == 'resolved':
+                        print(f"🧹 [Cleanup Stale Link] Unlinking {d['doc_id']} ('{d['title']}', status: {d['status']}) from Master {parent_doc['doc_id']} ('{parent_doc['title']}', status: {parent_doc['status']})")
                         d['parent_id'] = None
                         clear_url = f"https://firestore.googleapis.com/v1/projects/{self.project_id}/databases/(default)/documents/complaints/{d['doc_id']}?updateMask.fieldPaths=parentId"
                         requests.patch(clear_url, json={'fields': {}}, headers=patch_headers)
