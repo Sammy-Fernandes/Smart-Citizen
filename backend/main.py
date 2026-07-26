@@ -587,7 +587,8 @@ class RealtimeRestWorker:
                     category=category if category else title,
                     new_embedding=result.get('embedding'),
                     image_urls=image_urls,
-                    exclude_doc_id=doc_id
+                    exclude_doc_id=doc_id,
+                    title=title
                 )
 
                 payload = {
@@ -613,7 +614,7 @@ class RealtimeRestWorker:
         except Exception as e:
             print(f"⚠️ [Realtime Worker] Loop error: {e}")
 
-    def find_duplicate_master(self, lat, lon, category, new_embedding, image_urls, exclude_doc_id):
+    def find_duplicate_master(self, lat, lon, category, new_embedding, image_urls, exclude_doc_id, title=''):
         token = self.get_id_token()
         if not token: return None
 
@@ -650,7 +651,7 @@ class RealtimeRestWorker:
                 if norm_cat != doc_norm_cat:
                     continue
 
-                # RULE 2: Distance <= 50 meters
+                # RULE 2: Distance Check (STRICT MAX CAP: Must be <= 500.0 meters)
                 loc_map = fields.get('location', {}).get('mapValue', {}).get('fields', {})
                 try:
                     doc_lat = float(loc_map.get('latitude', {}).get('doubleValue', loc_map.get('latitude', {}).get('integerValue', 0)))
@@ -662,10 +663,10 @@ class RealtimeRestWorker:
                     continue
 
                 dist = calculate_distance(lat, lon, doc_lat, doc_lon)
-                if dist > 50.0:
+                if dist > 500.0:  # MANDATORY HARD DISTANCE RADIUS CAP
                     continue
 
-                # RULE 3: Visual Proof & Distance Match (Clean Image URL OR CLIP Cosine Similarity >= 0.75 OR Distance <= 50m)
+                # RULE 3: Visual Proof & Distance Match within 500m radius
                 clean_new_imgs = [u.split('?')[0] for u in image_urls if u]
                 img_array = fields.get('imageUrls', {}).get('arrayValue', {}).get('values', [])
                 existing_imgs = [item.get('stringValue').split('?')[0] for item in img_array if item.get('stringValue')]
@@ -818,6 +819,9 @@ class RealtimeRestWorker:
                     if d1['lat'] == 0 or d1['lon'] == 0 or d2['lat'] == 0 or d2['lon'] == 0:
                         continue
                     dist = calculate_distance(d1['lat'], d1['lon'], d2['lat'], d2['lon'])
+                    if dist > 500.0:  # MANDATORY HARD DISTANCE RADIUS CAP (Max 500m radius)
+                        continue
+
                     clean_imgs1 = [u.split('?')[0] for u in d1['image_urls'] if u]
                     clean_imgs2 = [u.split('?')[0] for u in d2['image_urls'] if u]
                     exact_match = clean_imgs1 and clean_imgs2 and any(u in clean_imgs2 for u in clean_imgs1)
