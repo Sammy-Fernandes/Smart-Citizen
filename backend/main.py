@@ -430,24 +430,143 @@ def on_broadcasts_snapshot(col_snapshot, changes, read_time):
         if change.type.name in ['ADDED', 'MODIFIED']:
             process_broadcast(change.document.id, change.document.to_dict())
 
-def start_listeners():
-    try:
-        # Re-verify all items on startup first (to avoid grpc threading deadlock with listeners)
-        print("🔍 Checking for existing reports to re-verify...")
-        all_complaints = db.collection('complaints').get()
-        for doc in all_complaints:
-            data = doc.to_dict()
-            process_complaint(doc.id, data, doc.reference)
+API_KEY = "AIzaSyC_J29mrAmjAFOoUos65aMnH3_itnRNOqE"
+PROJECT_ID = "civic-engagement-app-67289"
 
-        print("Starting Firestore listeners...")
-        db.collection('complaints').on_snapshot(on_complaints_snapshot)
-        db.collection('broadcasts').on_snapshot(on_broadcasts_snapshot)
-    except Exception as e:
-        print(f"⚠️ Firestore listeners operating in standby mode: {e}")
+class RealtimeRestWorker:
+    def __init__(self, api_key: str, project_id: str):
+        self.api_key = api_key
+        self.project_id = project_id
+        self.id_token = None
+        self.token_expiry = 0
 
-# Start listeners in background
-listener_thread = threading.Thread(target=start_listeners, daemon=True)
-listener_thread.start()
+    def get_id_token(self):
+        if self.id_token and time.time() < self.token_expiry:
+            return self.id_token
+        try:
+            auth_url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={self.api_key}"
+            res = requests.post(auth_url, json={'returnSecureToken': True}, timeout=10).json()
+            self.id_token = res.get('idToken')
+            self.token_expiry = time.time() + 3000
+            return self.id_token
+        except Exception as e:
+            print(f"❌ RealtimeWorker Auth Token Error: {e}")
+            return None
+
+    def update_doc_fields(self, doc_id: str, fields_dict: dict):
+        token = self.get_id_token()
+        if not token: return False
+
+        update_masks = [f"updateMask.fieldPaths={k}" for k in fields_dict.keys()]
+        query_str = "&".join(update_masks)
+        url = f"https://firestore.googleapis.com/v1/projects/{self.project_id}/databases/(default)/documents/complaints/{doc_id}?{query_str}"
+
+        headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+        firestore_fields = {}
+
+        for k, v in fields_dict.items():
+            if isinstance(v, bool):
+                firestore_fields[k] = {'booleanValue': v}
+            elif isinstance(v, (int, float)):
+                if isinstance(v, int):
+                    firestore_fields[k] = {'integerValue': str(v)}
+                else:
+                    firestore_fields[k] = {'doubleValue': float(v)}
+            elif isinstance(v, str):
+                firestore_fields[k] = {'stringValue': v}
+            elif isinstance(v, list):
+                if v and isinstance(v[0], str):
+                    firestore_fields[k] = {'arrayValue': {'values': [{'stringValue': s} for s in v]}}
+                elif v and isinstance(v[0], (int, float)):
+                    firestore_fields[k] = {'arrayValue': {'values': [{'doubleValue': float(n)} for n in v]}}
+                else:
+                    firestore_fields[k] = {'arrayValue': {'values': []}}
+
+        try:
+            r = requests.patch(url, json={'fields': firestore_fields}, headers=headers, timeout=10)
+            return r.status_code == 200
+        except Exception as e:
+            print(f"❌ RealtimeWorker update failed [{doc_id}]: {e}")
+            return False
+
+    def poll_and_process(self):
+        token = self.get_id_token()
+        if not token: return
+
+        url = f"https://firestore.googleapis.com/v1/projects/{self.project_id}/databases/(default)/documents/complaints"
+        headers = {'Authorization': f'Bearer {token}'}
+
+        try:
+            r = requests.get(url, headers=headers, timeout=10)
+            if r.status_code != 200: return
+            documents = r.json().get('documents', [])
+
+            for doc in documents:
+                name = doc.get('name', '')
+                doc_id = name.split('/')[-1]
+                fields = doc.get('fields', {})
+
+                ai_processed = fields.get('aiProcessed', {}).get('booleanValue', False)
+                if ai_processed:
+                    continue
+
+                title = fields.get('title', {}).get('stringValue', '')
+                description = fields.get('description', {}).get('stringValue', '')
+                category = fields.get('category', {}).get('stringValue', '')
+                
+                img_array = fields.get('imageUrls', {}).get('arrayValue', {}).get('values', [])
+                image_urls = [item.get('stringValue') for item in img_array if item.get('stringValue')]
+
+                loc_map = fields.get('location', {}).get('mapValue', {}).get('fields', {})
+                location = {
+                    'address': loc_map.get('address', {}).get('stringValue', ''),
+                    'latitude': float(loc_map.get('latitude', {}).get('doubleValue', loc_map.get('latitude', {}).get('integerValue', 0))),
+                    'longitude': float(loc_map.get('longitude', {}).get('doubleValue', loc_map.get('longitude', {}).get('integerValue', 0))),
+                }
+
+                if not image_urls:
+                    self.update_doc_fields(doc_id, {'aiProcessed': True, 'verificationStatus': 'unverified', 'verificationReason': 'No images submitted.'})
+                    continue
+
+                print(f"⚡ [Realtime Worker] Auto-Processing New Report: {doc_id} ('{title}')")
+
+                result = verification_model.verify_complaint(
+                    title=title,
+                    description=description,
+                    category=category,
+                    image_urls=image_urls,
+                    location=location
+                )
+
+                payload = {
+                    'verificationStatus': result['status'],
+                    'verificationConfidence': float(result['confidence']),
+                    'detectedIssues': result['issues'],
+                    'verificationReason': result['reason'],
+                    'priority': int(result['priority']),
+                    'severityScore': int(result.get('severity', 0)),
+                    'aiProcessed': True
+                }
+
+                success = self.update_doc_fields(doc_id, payload)
+                if success:
+                    print(f"✅ [Realtime Worker] Processed & updated report {doc_id} -> {result['status']} (Severity: {result.get('severity')})")
+        except Exception as e:
+            print(f"⚠️ [Realtime Worker] Loop error: {e}")
+
+    def start_loop(self):
+        print("⚡ Real-time Firestore REST Worker active (Polling every 3s)...")
+        while True:
+            try:
+                self.poll_and_process()
+            except Exception as e:
+                print(f"⚠️ Worker exception: {e}")
+            time.sleep(3)
+
+# Start real-time background worker
+rest_worker = RealtimeRestWorker(API_KEY, PROJECT_ID)
+worker_thread = threading.Thread(target=rest_worker.start_loop, daemon=True)
+worker_thread.start()
 
 class VerificationRequest(BaseModel):
     title: str
