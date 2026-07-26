@@ -779,73 +779,83 @@ class RealtimeRestWorker:
                         d['parent_id'] = None
                         clear_url = f"https://firestore.googleapis.com/v1/projects/{self.project_id}/databases/(default)/documents/complaints/{d['doc_id']}?updateMask.fieldPaths=parentId"
                         requests.patch(clear_url, json={'fields': {}}, headers=patch_headers)
-            clustered_count = 0
+            # Phase 2: Dynamic Connected-Components (Union-Find) Graph Clustering
+            active_candidates = [d for d in parsed_docs if d['status'] == 'pending' and d['v_status'] != 'rejected' and not d['rejection']]
 
-            for i, master in enumerate(parsed_docs):
-                master_id = master['doc_id']
+            parent_map = {d['doc_id']: d['doc_id'] for d in active_candidates}
+            def find(i):
+                if parent_map[i] == i:
+                    return i
+                parent_map[i] = find(parent_map[i])
+                return parent_map[i]
 
-                # CASCADING RESOLUTION CHECK: If Master is resolved, ensure all its linked children are also resolved
-                if master['status'] == 'resolved':
-                    for cand in parsed_docs:
-                        if cand.get('parent_id') == master_id and cand['status'] != 'resolved':
-                            print(f"🔄 [Cascading Resolution] Syncing child report {cand['doc_id']} ('{cand['title']}') -> resolved (Master {master_id} resolved)")
-                            cand['status'] = 'resolved'
-                            patch_res_url = f"https://firestore.googleapis.com/v1/projects/{self.project_id}/databases/(default)/documents/complaints/{cand['doc_id']}?updateMask.fieldPaths=status"
-                            requests.patch(patch_res_url, json={'fields': {'status': {'stringValue': 'resolved'}}}, headers=patch_headers)
-                    continue
+            def union(i, j):
+                root_i = find(i)
+                root_j = find(j)
+                if root_i != root_j:
+                    parent_map[root_i] = root_j
 
-                if master['parent_id'] or master['status'] == 'rejected' or master['v_status'] == 'rejected' or master['rejection']:
-                    continue
-
-                child_ids = []
-                child_severities = []
-
-                for j, candidate in enumerate(parsed_docs):
-                    if i == j or candidate['parent_id'] or candidate['status'] == 'resolved' or candidate['status'] == 'rejected' or candidate['v_status'] == 'rejected' or candidate['rejection']:
+            n = len(active_candidates)
+            for i in range(n):
+                for j in range(i+1, n):
+                    d1, d2 = active_candidates[i], active_candidates[j]
+                    if d1['norm_cat'] != d2['norm_cat']:
                         continue
-
-                    # RULE 1: Mandatory Sub-Category Match
-                    if master['norm_cat'] != candidate['norm_cat']:
+                    if d1['lat'] == 0 or d1['lon'] == 0 or d2['lat'] == 0 or d2['lon'] == 0:
                         continue
-
-                    # RULE 2: Distance <= 50m
-                    if master['lat'] == 0 or master['lon'] == 0 or candidate['lat'] == 0 or candidate['lon'] == 0:
-                        continue
-                    dist = calculate_distance(master['lat'], master['lon'], candidate['lat'], candidate['lon'])
-                    if dist > 50.0:
-                        continue
-
-                    # RULE 3: Exact Image Match OR Cosine Sim >= 0.75 OR Distance <= 50m
-                    clean_master_imgs = [u.split('?')[0] for u in master['image_urls'] if u]
-                    clean_cand_imgs = [u.split('?')[0] for u in candidate['image_urls'] if u]
-                    exact_match = clean_master_imgs and clean_cand_imgs and any(u in clean_cand_imgs for u in clean_master_imgs)
+                    dist = calculate_distance(d1['lat'], d1['lon'], d2['lat'], d2['lon'])
+                    clean_imgs1 = [u.split('?')[0] for u in d1['image_urls'] if u]
+                    clean_imgs2 = [u.split('?')[0] for u in d2['image_urls'] if u]
+                    exact_match = clean_imgs1 and clean_imgs2 and any(u in clean_imgs2 for u in clean_imgs1)
                     sim = 0.0
-                    if master['embedding'] and candidate['embedding'] and len(master['embedding']) == len(candidate['embedding']):
-                        dot = np.dot(master['embedding'], candidate['embedding'])
-                        norm_a = np.linalg.norm(master['embedding'])
-                        norm_b = np.linalg.norm(candidate['embedding'])
+                    if d1['embedding'] and d2['embedding'] and len(d1['embedding']) == len(d2['embedding']):
+                        dot = np.dot(d1['embedding'], d2['embedding'])
+                        norm_a = np.linalg.norm(d1['embedding'])
+                        norm_b = np.linalg.norm(d2['embedding'])
                         sim = dot / (norm_a * norm_b) if norm_a and norm_b else 0.0
-
+                    
                     is_dup = exact_match or (sim >= 0.75) or (dist <= 50.0)
-
                     if is_dup:
-                        child_id = candidate['doc_id']
-                        candidate['parent_id'] = master_id
-                        child_ids.append(child_id)
-                        child_severities.append(candidate['severity'])
-                        clustered_count += 1
-                        print(f"🔗 [Startup Sweep] Linked duplicate {child_id} ('{candidate['title']}') -> Master {master_id} ('{master['title']}') [Cat: {master['norm_cat']}, Dist: {dist:.1f}m, Sim: {sim:.2f}]")
-                        
-                        patch_url = f"https://firestore.googleapis.com/v1/projects/{self.project_id}/databases/(default)/documents/complaints/{child_id}?updateMask.fieldPaths=parentId"
-                        requests.patch(patch_url, json={'fields': {'parentId': {'stringValue': master_id}}}, headers=patch_headers)
+                        union(d1['doc_id'], d2['doc_id'])
 
-                if child_ids:
-                    all_severities = [master['severity']] + child_severities
-                    comb_severity = min(100, max(all_severities) + min(20, len(child_ids) * 5))
-                    patch_m_url = f"https://firestore.googleapis.com/v1/projects/{self.project_id}/databases/(default)/documents/complaints/{master_id}?updateMask.fieldPaths=combinedSeverity"
-                    requests.patch(patch_m_url, json={'fields': {'combinedSeverity': {'integerValue': str(comb_severity)}}}, headers=patch_headers)
+            components = {}
+            for d in active_candidates:
+                root = find(d['doc_id'])
+                if root not in components:
+                    components[root] = []
+                components[root].append(d)
 
-            print(f"✅ [Startup Sweep] Completed! Total duplicates linked: {clustered_count}. Shifting to Real-Time 3s Polling...")
+            clustered_count = 0
+            for root_id, members in components.items():
+                if len(members) <= 1:
+                    m = members[0]
+                    patch_url = f"https://firestore.googleapis.com/v1/projects/{self.project_id}/databases/(default)/documents/complaints/{m['doc_id']}?updateMask.fieldPaths=parentId"
+                    requests.patch(patch_url, json={'fields': {}}, headers=patch_headers)
+                    continue
+
+                members.sort(key=lambda x: (-x['severity'], x['doc_id']))
+                master = members[0]
+                master_id = master['doc_id']
+                children = members[1:]
+
+                patch_m_url = f"https://firestore.googleapis.com/v1/projects/{self.project_id}/databases/(default)/documents/complaints/{master_id}?updateMask.fieldPaths=parentId"
+                requests.patch(patch_m_url, json={'fields': {}}, headers=patch_headers)
+
+                child_severities = []
+                for child in children:
+                    child_id = child['doc_id']
+                    child_severities.append(child['severity'])
+                    clustered_count += 1
+                    print(f"🔗 [Graph Clustering] Linked child {child_id} ('{child['title']}') -> Master {master_id} ('{master['title']}') [Cat: {master['norm_cat']}]")
+                    patch_c_url = f"https://firestore.googleapis.com/v1/projects/{self.project_id}/databases/(default)/documents/complaints/{child_id}?updateMask.fieldPaths=parentId"
+                    requests.patch(patch_c_url, json={'fields': {'parentId': {'stringValue': master_id}}}, headers=patch_headers)
+
+                all_severities = [master['severity']] + child_severities
+                comb_severity = min(100, max(all_severities) + min(20, len(children) * 5))
+                patch_sev_url = f"https://firestore.googleapis.com/v1/projects/{self.project_id}/databases/(default)/documents/complaints/{master_id}?updateMask.fieldPaths=combinedSeverity"
+                requests.patch(patch_sev_url, json={'fields': {'combinedSeverity': {'integerValue': str(comb_severity)}}}, headers=patch_headers)
+
+            print(f"✅ [Dynamic Graph Sweep] Completed! Total duplicates linked: {clustered_count}. Shifting to Real-Time 3s Polling...")
 
         except Exception as e:
             print(f"⚠️ Startup sweep error: {e}")
