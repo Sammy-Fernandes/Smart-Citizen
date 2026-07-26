@@ -449,6 +449,24 @@ def start_listeners():
 listener_thread = threading.Thread(target=start_listeners, daemon=True)
 listener_thread.start()
 
+class VerificationRequest(BaseModel):
+    title: str
+    description: str
+    category: str
+    image_urls: List[str]
+    location: Optional[dict] = {}
+
+@app.post("/verify")
+async def verify_endpoint(req: VerificationRequest):
+    result = verification_model.verify_complaint(
+        title=req.title,
+        description=req.description,
+        category=req.category,
+        image_urls=req.image_urls,
+        location=req.location or {}
+    )
+    return result
+
 @app.get("/health")
 async def health_check():
     return {"status": "ok", "message": "Smart Citizen Backend is running"}
