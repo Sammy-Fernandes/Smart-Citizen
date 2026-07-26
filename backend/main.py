@@ -636,7 +636,7 @@ class RealtimeRestWorker:
                 if norm_cat != doc_norm_cat:
                     continue
 
-                # RULE 2: Distance <= 25 meters
+                # RULE 2: Distance <= 50 meters
                 loc_map = fields.get('location', {}).get('mapValue', {}).get('fields', {})
                 try:
                     doc_lat = float(loc_map.get('latitude', {}).get('doubleValue', loc_map.get('latitude', {}).get('integerValue', 0)))
@@ -648,13 +648,14 @@ class RealtimeRestWorker:
                     continue
 
                 dist = calculate_distance(lat, lon, doc_lat, doc_lon)
-                if dist > 25.0:
+                if dist > 50.0:
                     continue
 
-                # RULE 3: Visual Proof Match (Exact Image URL OR CLIP Cosine Similarity >= 0.82)
+                # RULE 3: Visual Proof & Distance Match (Clean Image URL OR CLIP Cosine Similarity >= 0.75 OR Distance <= 50m)
+                clean_new_imgs = [u.split('?')[0] for u in image_urls if u]
                 img_array = fields.get('imageUrls', {}).get('arrayValue', {}).get('values', [])
-                existing_imgs = [item.get('stringValue') for item in img_array if item.get('stringValue')]
-                exact_match = image_urls and existing_imgs and any(u in existing_imgs for u in image_urls)
+                existing_imgs = [item.get('stringValue').split('?')[0] for item in img_array if item.get('stringValue')]
+                exact_match = clean_new_imgs and existing_imgs and any(u in existing_imgs for u in clean_new_imgs)
 
                 old_embed_values = fields.get('visualEmbedding', {}).get('arrayValue', {}).get('values', [])
                 old_embedding = [float(v.get('doubleValue', v.get('integerValue', 0))) for v in old_embed_values]
@@ -666,8 +667,10 @@ class RealtimeRestWorker:
                     norm_b = np.linalg.norm(old_embedding)
                     sim = dot / (norm_a * norm_b) if norm_a and norm_b else 0
 
-                if exact_match or (sim >= 0.82):
-                    print(f"🔗 [Strict Duplicate Match] Category '{norm_cat}' | Dist {dist:.1f}m | Sim {sim:.2f} -> Master {doc_id}")
+                is_dup = exact_match or (sim >= 0.75) or (dist <= 50.0)
+
+                if is_dup:
+                    print(f"🔗 [Duplicate Match] Category '{norm_cat}' | Dist {dist:.1f}m | Sim {sim:.2f} -> Master {doc_id}")
                     return doc_id
 
         except Exception as e:
@@ -805,15 +808,17 @@ class RealtimeRestWorker:
                     if master['norm_cat'] != candidate['norm_cat']:
                         continue
 
-                    # RULE 2: Distance <= 25m
+                    # RULE 2: Distance <= 50m
                     if master['lat'] == 0 or master['lon'] == 0 or candidate['lat'] == 0 or candidate['lon'] == 0:
                         continue
                     dist = calculate_distance(master['lat'], master['lon'], candidate['lat'], candidate['lon'])
-                    if dist > 25.0:
+                    if dist > 50.0:
                         continue
 
-                    # RULE 3: Exact Image Match OR Cosine Sim >= 0.82 OR Same Spot (Dist <= 20m)
-                    exact_match = master['image_urls'] and candidate['image_urls'] and any(u in candidate['image_urls'] for u in master['image_urls'])
+                    # RULE 3: Exact Image Match OR Cosine Sim >= 0.75 OR Distance <= 50m
+                    clean_master_imgs = [u.split('?')[0] for u in master['image_urls'] if u]
+                    clean_cand_imgs = [u.split('?')[0] for u in candidate['image_urls'] if u]
+                    exact_match = clean_master_imgs and clean_cand_imgs and any(u in clean_cand_imgs for u in clean_master_imgs)
                     sim = 0.0
                     if master['embedding'] and candidate['embedding'] and len(master['embedding']) == len(candidate['embedding']):
                         dot = np.dot(master['embedding'], candidate['embedding'])
@@ -821,7 +826,7 @@ class RealtimeRestWorker:
                         norm_b = np.linalg.norm(candidate['embedding'])
                         sim = dot / (norm_a * norm_b) if norm_a and norm_b else 0.0
 
-                    is_dup = exact_match or (sim >= 0.82) or (dist <= 20.0)
+                    is_dup = exact_match or (sim >= 0.75) or (dist <= 50.0)
 
                     if is_dup:
                         child_id = candidate['doc_id']
