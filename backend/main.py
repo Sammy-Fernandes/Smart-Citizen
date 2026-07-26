@@ -611,7 +611,7 @@ class RealtimeRestWorker:
 
                 status = fields.get('status', {}).get('stringValue', '')
                 v_status = fields.get('verificationStatus', {}).get('stringValue', '')
-                if status == 'resolved' or status == 'rejected' or v_status == 'rejected' or 'rejectionReason' in fields:
+                if status == 'rejected' or v_status == 'rejected' or 'rejectionReason' in fields:
                     continue
 
                 # RULE 1: Category Match
@@ -751,14 +751,14 @@ class RealtimeRestWorker:
             clustered_count = 0
 
             for i, master in enumerate(parsed_docs):
-                if master['parent_id'] or master['status'] == 'resolved' or master['status'] == 'rejected' or master['v_status'] == 'rejected' or master['rejection']:
+                if master['parent_id'] or master['status'] == 'rejected' or master['v_status'] == 'rejected' or master['rejection']:
                     continue
 
                 master_id = master['doc_id']
                 child_ids = []
 
                 for j, candidate in enumerate(parsed_docs):
-                    if i == j or candidate['parent_id'] or candidate['status'] == 'resolved' or candidate['status'] == 'rejected' or candidate['v_status'] == 'rejected' or candidate['rejection']:
+                    if i == j or candidate['parent_id'] or candidate['status'] == 'rejected' or candidate['v_status'] == 'rejected' or candidate['rejection']:
                         continue
 
                     # RULE 1: Mandatory Category Match
