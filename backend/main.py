@@ -784,13 +784,14 @@ class RealtimeRestWorker:
 
             patch_headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
 
-            # Cleanup stale cross-category or status-mismatched parent links
+            # Cleanup stale cross-category, status-mismatched, or >500m distance parent links
             doc_map = {d['doc_id']: d for d in parsed_docs}
             for d in parsed_docs:
                 if d['parent_id'] and d['parent_id'] in doc_map:
                     parent_doc = doc_map[d['parent_id']]
-                    if parent_doc['norm_cat'] != d['norm_cat'] or parent_doc['status'] != d['status'] or d['status'] == 'resolved' or parent_doc['status'] == 'resolved':
-                        print(f"🧹 [Cleanup Stale Link] Unlinking {d['doc_id']} ('{d['title']}', status: {d['status']}) from Master {parent_doc['doc_id']} ('{parent_doc['title']}', status: {parent_doc['status']})")
+                    dist = calculate_distance(d['lat'], d['lon'], parent_doc['lat'], parent_doc['lon']) if (d['lat'] > 0 and parent_doc['lat'] > 0) else 0
+                    if parent_doc['norm_cat'] != d['norm_cat'] or parent_doc['status'] != d['status'] or d['status'] == 'resolved' or parent_doc['status'] == 'resolved' or dist > 500.0:
+                        print(f"🧹 [Cleanup Stale Link] Unlinking {d['doc_id']} ('{d['title']}', Dist: {dist:.1f}m) from Master {parent_doc['doc_id']} ('{parent_doc['title']}')")
                         d['parent_id'] = None
                         self.clear_doc_field(d['doc_id'], 'parentId')
 
