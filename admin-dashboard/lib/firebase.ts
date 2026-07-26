@@ -13,9 +13,15 @@ const firebaseConfig = {
     measurementId: "G-W13ESJ8CTN"
 };
 
-// Initialize Firebase
+// Singleton pattern to prevent Next.js Turbopack HMR re-initialization assertion errors
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
-const db = getFirestore(app);
-const auth = getAuth(app);
+
+const globalWithFirebase = globalThis as unknown as {
+    __FIREBASE_AUTH__?: ReturnType<typeof getAuth>;
+    __FIREBASE_DB__?: ReturnType<typeof getFirestore>;
+};
+
+const auth = globalWithFirebase.__FIREBASE_AUTH__ || (globalWithFirebase.__FIREBASE_AUTH__ = getAuth(app));
+const db = globalWithFirebase.__FIREBASE_DB__ || (globalWithFirebase.__FIREBASE_DB__ = getFirestore(app));
 
 export { app, auth, db };

@@ -208,8 +208,8 @@ export default function ExploreScreen() {
                   <View style={styles.cardInner}>
                     <View style={styles.upvoteSection}>
                       <TouchableOpacity onPress={() => handleUpvote(c.id, 'complaint')} style={styles.upvoteButton}>
-                        <View style={[styles.upvoteIconContainer, c.upvotedBy?.includes(user?.uid) && styles.upvoteIconContainerActive]}>
-                          <Ionicons name="arrow-up" size={20} color={c.upvotedBy?.includes(user?.uid) ? "#000" : "#00ff88"} />
+                        <View style={[styles.upvoteIconContainer, (c.upvotedBy && user?.uid && c.upvotedBy.includes(user.uid)) && styles.upvoteIconContainerActive]}>
+                          <Ionicons name="arrow-up" size={20} color={(c.upvotedBy && user?.uid && c.upvotedBy.includes(user.uid)) ? "#000" : "#00ff88"} />
                         </View>
                       </TouchableOpacity>
                       <Text style={styles.upvoteCount}>{c.upvotes || 0}</Text>
@@ -227,7 +227,7 @@ export default function ExploreScreen() {
                           {/* AI Verification Badges */}
                           {c.verificationStatus === 'verified' && (
                             <View style={[styles.aiBadge, styles.aiBadgeVerified]}>
-                              <Ionicons name="checkmark-seal" size={12} color="#fff" />
+                              <Ionicons name="checkmark-circle" size={12} color="#fff" />
                               <Text style={styles.aiBadgeText}>AI Verified</Text>
                             </View>
                           )}
@@ -263,8 +263,8 @@ export default function ExploreScreen() {
                   <View style={styles.cardInner}>
                     <View style={styles.upvoteSection}>
                       <TouchableOpacity onPress={() => handleUpvote(s.id, 'suggestion')} style={styles.upvoteButton}>
-                        <View style={[styles.upvoteIconContainer, s.upvotedBy?.includes(user?.uid) && styles.upvoteIconContainerActive]}>
-                          <Ionicons name="thumbs-up" size={20} color={s.upvotedBy?.includes(user?.uid) ? "#000" : "#00ff88"} />
+                        <View style={[styles.upvoteIconContainer, (s.upvotedBy && user?.uid && s.upvotedBy.includes(user.uid)) && styles.upvoteIconContainerActive]}>
+                          <Ionicons name="thumbs-up" size={20} color={(s.upvotedBy && user?.uid && s.upvotedBy.includes(user.uid)) ? "#000" : "#00ff88"} />
                         </View>
                       </TouchableOpacity>
                       <Text style={styles.upvoteCount}>{s.upvotes || 0}</Text>
@@ -339,7 +339,7 @@ export default function ExploreScreen() {
                 <View style={{ marginBottom: 16 }}>
                   {selectedItem.verificationStatus === 'verified' && (
                     <View style={[styles.aiBadge, { position: 'relative', top: 0, left: 0, alignSelf: 'flex-start' }, styles.aiBadgeVerified]}>
-                      <Ionicons name="checkmark-seal" size={14} color="#fff" />
+                      <Ionicons name="checkmark-circle" size={14} color="#fff" />
                       <Text style={[styles.aiBadgeText, { fontSize: 12 }]}>AI Verified Authenticated Report</Text>
                     </View>
                   )}
@@ -388,9 +388,10 @@ export default function ExploreScreen() {
                     styles.statusBadge,
                     selectedItem.status === 'resolved' && styles.statusResolved,
                     selectedItem.status === 'in-progress' && styles.statusInProgress,
+                    (selectedItem.status === 'rejected' || selectedItem.verificationStatus === 'rejected') && { backgroundColor: 'rgba(255,68,68,0.15)', borderColor: 'rgba(255,68,68,0.4)' },
                   ]}>
                     <Ionicons
-                      name={selectedItem.status === 'resolved' ? 'checkmark-circle' : selectedItem.status === 'in-progress' ? 'time' : 'alert-circle'}
+                      name={selectedItem.status === 'resolved' ? 'checkmark-circle' : selectedItem.status === 'in-progress' ? 'time' : (selectedItem.status === 'rejected' || selectedItem.verificationStatus === 'rejected') ? 'close-circle' : 'alert-circle'}
                       size={14}
                       color={selectedItem.status === 'resolved' ? '#00ff88' : selectedItem.status === 'in-progress' ? '#ffa500' : '#ff4444'}
                     />
@@ -398,11 +399,35 @@ export default function ExploreScreen() {
                       styles.statusText,
                       selectedItem.status === 'resolved' && { color: '#00ff88' },
                       selectedItem.status === 'in-progress' && { color: '#ffa500' },
+                      (selectedItem.status === 'rejected' || selectedItem.verificationStatus === 'rejected') && { color: '#ff4444' },
                       selectedItem.status === 'pending' && { color: '#ff4444' },
                     ]}>
-                      {selectedItem.status === 'resolved' ? 'Resolved' : selectedItem.status === 'in-progress' ? 'In Progress' : 'Pending'}
+                      {selectedItem.status === 'resolved' ? 'Resolved' : selectedItem.status === 'in-progress' ? 'In Progress' : (selectedItem.status === 'rejected' || selectedItem.verificationStatus === 'rejected') ? 'Rejected' : 'Pending'}
                     </Text>
                   </View>
+                </View>
+              )}
+
+              {/* Rejection Details in Community Hub Detail Modal */}
+              {selectedType === 'complaint' && (selectedItem.status === 'rejected' || selectedItem.verificationStatus === 'rejected') && (
+                <View style={styles.exploreRejectSection}>
+                  <View style={styles.exploreRejectHeader}>
+                    <Ionicons name="close-circle" size={18} color="#ff4444" style={{ marginRight: 6 }} />
+                    <Text style={styles.exploreRejectTitle}>Report Decision: Rejected</Text>
+                  </View>
+                  {(selectedItem.rejectionTags?.length > 0 || selectedItem.rejection?.tags?.length > 0) && (
+                    <View style={styles.exploreTagChipsRow}>
+                      {(selectedItem.rejectionTags || selectedItem.rejection?.tags || []).map((tag: string, idx: number) => (
+                        <View key={idx} style={styles.exploreTagChip}>
+                          <Ionicons name="pricetag" size={10} color="#ffaaaa" style={{ marginRight: 3 }} />
+                          <Text style={styles.exploreTagChipText}>{tag}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                  <Text style={styles.exploreRejectNote}>
+                    {selectedItem.rejectionReason || selectedItem.rejection?.note || selectedItem.rejection?.reason || 'This report was flagged or rejected after verification.'}
+                  </Text>
                 </View>
               )}
 
@@ -490,6 +515,7 @@ const styles = StyleSheet.create({
   glowBottom: { position: 'absolute', bottom: -150, left: -100, width: 400, height: 400, borderRadius: 200, backgroundColor: '#00cc6f', opacity: 0.08 },
   header: { marginBottom: 24 },
   headerContent: { flexDirection: 'row', alignItems: 'center', gap: 16 },
+  iconContainer: { borderRadius: 28 },
   iconGradient: { width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center' },
   iconGlow: { position: 'absolute', top: -6, left: -6, right: -6, bottom: -6, borderRadius: 34, backgroundColor: '#00ff88', opacity: 0.3, zIndex: -1 },
   title: { color: '#fff', fontSize: 28, fontWeight: '700', letterSpacing: -0.5 },
@@ -506,7 +532,7 @@ const styles = StyleSheet.create({
   cardInner: { flexDirection: 'row', padding: 16 },
   upvoteSection: { alignItems: 'center', marginRight: 16, width: 40 },
   upvoteButton: { marginBottom: 4 },
-  upvoteIconContainer: { width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(0, 255, 136, 0.1)', borderWIdth: 1, borderColor: 'rgba(0,255,136,0.3)', alignItems: 'center', justifyContent: 'center' },
+  upvoteIconContainer: { width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(0, 255, 136, 0.1)', borderWidth: 1, borderColor: 'rgba(0,255,136,0.3)', alignItems: 'center', justifyContent: 'center' },
   upvoteIconContainerActive: { backgroundColor: '#00ff88' },
   upvoteCount: { color: '#00ff88', fontSize: 14, fontWeight: '700' },
   contentSection: { flex: 1 },
@@ -562,18 +588,6 @@ const styles = StyleSheet.create({
   statusText: { fontSize: 13, fontWeight: '700', color: '#ff4444' },
   locationRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginBottom: 20, backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 12, padding: 10 },
   locationAddress: { color: 'rgba(255,255,255,0.45)', fontSize: 12, flex: 1, lineHeight: 18 },
-  // ── Deprecated (kept for safety) ─────────────────────────
-  detailGrid: { flexDirection: 'row', gap: 10, marginBottom: 20 },
-  detailItem: { flex: 1, backgroundColor: 'rgba(255,255,255,0.05)', padding: 12, borderRadius: 12 },
-  detailLabel: { color: '#00ff88', fontSize: 11, fontWeight: '700', marginBottom: 4, letterSpacing: 1 },
-  detailValue: { color: '#fff', fontSize: 15, fontWeight: '600' },
-  commentsContainer: { marginTop: 20 },
-  commentCard: { backgroundColor: 'rgba(255,255,255,0.03)', padding: 12, borderRadius: 12, marginBottom: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' },
-  commentUserName: { color: '#00ff88', fontSize: 12, fontWeight: '700', marginBottom: 4 },
-  commentText: { color: '#fff', fontSize: 14, lineHeight: 20 },
-  commentInputContainer: { flexDirection: 'row', gap: 10, alignItems: 'center' },
-  commentInput: { flex: 1, backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: 16, paddingHorizontal: 15, paddingVertical: 12, color: '#fff', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
-  sendButton: { width: 46, height: 46, borderRadius: 23, backgroundColor: '#00ff88', alignItems: 'center', justifyContent: 'center' },
   errorText: { color: '#ff4444', textAlign: 'center', padding: 20 },
   imageContainer: { marginBottom: 12, borderRadius: 12, overflow: 'hidden' },
   complaintImage: { width: '100%', height: 180, borderRadius: 12 },
@@ -620,5 +634,52 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     marginLeft: 4,
     textTransform: 'uppercase',
+  },
+
+  // Explore Rejection Styles
+  exploreRejectSection: {
+    backgroundColor: 'rgba(255, 68, 68, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 68, 68, 0.3)',
+    borderRadius: 14,
+    padding: 12,
+    marginTop: 12,
+    marginBottom: 8,
+  },
+  exploreRejectHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  exploreRejectTitle: {
+    color: '#ff4444',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  exploreTagChipsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
+    marginBottom: 6,
+  },
+  exploreTagChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 68, 68, 0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 68, 68, 0.35)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  exploreTagChipText: {
+    color: '#ffaaaa',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  exploreRejectNote: {
+    color: '#fff',
+    fontSize: 13,
+    lineHeight: 18,
   },
 });

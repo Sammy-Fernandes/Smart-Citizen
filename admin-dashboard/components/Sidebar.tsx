@@ -1,10 +1,12 @@
 'use client';
 
+import { auth } from '@/lib/firebase';
 import { cn } from '@/lib/utils';
+import { signOut } from 'firebase/auth';
 import { motion } from 'framer-motion';
 import { AlertCircle, Bell, LayoutDashboard, LogOut, MessageSquare, Settings } from 'lucide-react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 
 const menuItems = [
     { icon: LayoutDashboard, label: 'Overview', href: '/dashboard' },
@@ -16,6 +18,16 @@ const menuItems = [
 
 export default function Sidebar() {
     const pathname = usePathname();
+    const router = useRouter();
+
+    const handleLogout = async () => {
+        try {
+            await signOut(auth);
+            router.push('/');
+        } catch (error) {
+            console.error("Logout error:", error);
+        }
+    };
 
     return (
         <div className="h-screen w-64 glass-card border-r border-r-[rgba(0,255,136,0.1)] fixed left-0 top-0 flex flex-col z-50">
@@ -23,7 +35,7 @@ export default function Sidebar() {
                 <h1 className="text-2xl font-bold bg-gradient-to-r from-white to-[#00ff88] bg-clip-text text-transparent">
                     Smart Citizen
                 </h1>
-                <p className="text-xs text-zinc-500 tracking-wider mt-1 uppercase">Admin Portal</p>
+                <p className="text-xs text-zinc-500 tracking-wider mt-1 uppercase font-semibold">Admin Portal</p>
             </div>
 
             <nav className="flex-1 px-4 space-y-2">
@@ -59,7 +71,10 @@ export default function Sidebar() {
             </nav>
 
             <div className="p-4">
-                <button className="flex items-center gap-3 w-full px-4 py-3 text-red-400 hover:text-red-300 hover:bg-[rgba(255,68,68,0.1)] rounded-xl transition-colors">
+                <button 
+                    onClick={handleLogout}
+                    className="flex items-center gap-3 w-full px-4 py-3 text-red-400 hover:text-red-300 hover:bg-[rgba(255,68,68,0.1)] rounded-xl transition-colors font-medium text-sm cursor-pointer"
+                >
                     <LogOut size={20} />
                     <span>Logout</span>
                 </button>

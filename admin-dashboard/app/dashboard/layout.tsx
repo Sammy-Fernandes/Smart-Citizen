@@ -19,7 +19,7 @@ export default function DashboardLayout({
                 setIsAuthenticated(true);
             } else {
                 setIsAuthenticated(false);
-                router.push('/login');
+                router.push('/');
             }
         });
         return () => unsub();

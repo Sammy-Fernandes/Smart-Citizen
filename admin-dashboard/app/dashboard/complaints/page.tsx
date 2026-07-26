@@ -21,7 +21,10 @@ import {
     Layers,
     Activity,
     MapPin,
-    Car
+    Car,
+    Tag,
+    Plus,
+    Check
 } from 'lucide-react';
 import { useEffect, useState, useMemo } from 'react';
 import { INDIAN_STATES, DISTRICTS_BY_STATE, extractState } from '@/lib/locationData';
@@ -38,6 +41,23 @@ export default function ComplaintsPage() {
     const [resolutionNote, setResolutionNote] = useState('');
     const [resolutionImage, setResolutionImage] = useState<File | null>(null);
     const [isResolving, setIsResolving] = useState(false);
+
+    // Rejection Modal State
+    const [rejectingId, setRejectingId] = useState<string | null>(null);
+    const [rejectionReason, setRejectionReason] = useState('');
+    const [selectedRejectionTags, setSelectedRejectionTags] = useState<string[]>([]);
+    const [customTagInput, setCustomTagInput] = useState('');
+    const [isRejecting, setIsRejecting] = useState(false);
+
+    const PRESET_REJECTION_TAGS = [
+        "Duplicate Report",
+        "Inadequate Photo Proof",
+        "Out of Jurisdiction",
+        "Spam / Irrelevant",
+        "Insufficient Details",
+        "Invalid Location",
+        "Wrong Department"
+    ];
 
     // Comment State for Admin
     const [reportComments, setReportComments] = useState<any[]>([]);
@@ -166,16 +186,75 @@ export default function ComplaintsPage() {
                     updatedAt: Timestamp.now()
                 });
             } else if (action === 'reject') {
-                await updateDoc(ref, {
-                    verificationStatus: 'rejected',
-                    status: 'rejected', // Optional if you have this status
-                    aiProcessed: true,
-                    updatedAt: Timestamp.now()
-                });
+                setRejectingId(id);
+                setRejectionReason('');
+                setSelectedRejectionTags([]);
+                setCustomTagInput('');
+                return;
             }
         } catch (e) {
             console.error("Action failed", e);
             alert("Action failed: " + e);
+        }
+    };
+
+    const handleConfirmRejection = async () => {
+        if (!rejectingId) return;
+
+        if (!rejectionReason.trim() && selectedRejectionTags.length === 0) {
+            alert("Please provide a rejection reason or select at least one tag.");
+            return;
+        }
+
+        setIsRejecting(true);
+        try {
+            const ref = doc(db, 'complaints', rejectingId);
+            const finalReason = rejectionReason.trim();
+            const finalTags = [...selectedRejectionTags];
+
+            await updateDoc(ref, {
+                verificationStatus: 'rejected',
+                status: 'rejected',
+                aiProcessed: true,
+                rejectionReason: finalReason,
+                rejectionTags: finalTags,
+                rejection: {
+                    reason: finalReason,
+                    note: finalReason,
+                    tags: finalTags,
+                    rejectedAt: Timestamp.now(),
+                    rejectedBy: 'Official Admin'
+                },
+                rejectedAt: Timestamp.now(),
+                updatedAt: Timestamp.now()
+            });
+
+            setRejectingId(null);
+            setRejectionReason('');
+            setSelectedRejectionTags([]);
+            setCustomTagInput('');
+            alert("Report rejected with reason and tags saved successfully.");
+        } catch (e) {
+            console.error("Rejection failed", e);
+            alert("Failed to reject report: " + e);
+        } finally {
+            setIsRejecting(false);
+        }
+    };
+
+    const toggleRejectionTag = (tag: string) => {
+        if (selectedRejectionTags.includes(tag)) {
+            setSelectedRejectionTags(selectedRejectionTags.filter(t => t !== tag));
+        } else {
+            setSelectedRejectionTags([...selectedRejectionTags, tag]);
+        }
+    };
+
+    const handleAddCustomTag = () => {
+        const trimmed = customTagInput.trim();
+        if (trimmed && !selectedRejectionTags.includes(trimmed)) {
+            setSelectedRejectionTags([...selectedRejectionTags, trimmed]);
+            setCustomTagInput('');
         }
     };
 
@@ -249,9 +328,10 @@ export default function ComplaintsPage() {
         const baseMatch = matchesSearch && matchesState && matchesDistrict;
 
         if (filter === 'all') return baseMatch;
-        if (filter === 'pending') return baseMatch && (!c.verificationStatus || c.verificationStatus === 'unverified') && c.status !== 'resolved';
-        if (filter === 'verified') return baseMatch && c.verificationStatus === 'verified' && c.status !== 'resolved';
+        if (filter === 'pending') return baseMatch && (!c.verificationStatus || c.verificationStatus === 'unverified') && c.status !== 'resolved' && c.status !== 'rejected';
+        if (filter === 'verified') return baseMatch && c.verificationStatus === 'verified' && c.status !== 'resolved' && c.status !== 'rejected';
         if (filter === 'resolved') return baseMatch && c.status === 'resolved';
+        if (filter === 'rejected') return baseMatch && (c.status === 'rejected' || c.verificationStatus === 'rejected');
         return baseMatch;
     });
 
@@ -315,6 +395,114 @@ export default function ComplaintsPage() {
                 </div>
             )}
 
+            {/* Rejection Modal Overlay */}
+            {rejectingId && (
+                <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                    <div className="bg-[#09090b] border border-red-500/20 rounded-2xl w-full max-w-lg p-6 shadow-2xl relative">
+                        <button
+                            onClick={() => setRejectingId(null)}
+                            className="absolute top-4 right-4 text-zinc-400 hover:text-white"
+                        >
+                            <XCircle size={24} />
+                        </button>
+
+                        <div className="flex items-center gap-2 mb-1">
+                            <XCircle className="text-red-500" size={24} />
+                            <h2 className="text-xl font-bold text-white">Reject Report Ticket</h2>
+                        </div>
+                        <p className="text-zinc-400 text-sm mb-5">
+                            Categorize and explain why this citizen report is being rejected.
+                        </p>
+
+                        <div className="space-y-4">
+                            {/* Rejection Tags Selection */}
+                            <div>
+                                <label className="block text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                                    <Tag size={14} className="text-red-400" /> Rejection Reason Tags
+                                </label>
+                                <div className="flex flex-wrap gap-1.5 mb-3 max-h-32 overflow-y-auto pr-1">
+                                    {PRESET_REJECTION_TAGS.map(tag => {
+                                        const isSelected = selectedRejectionTags.includes(tag);
+                                        return (
+                                            <button
+                                                key={tag}
+                                                type="button"
+                                                onClick={() => toggleRejectionTag(tag)}
+                                                className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all flex items-center gap-1.5 ${
+                                                    isSelected
+                                                        ? 'bg-red-500/20 text-red-300 border-red-500/60 shadow-[0_0_10px_rgba(239,68,68,0.2)]'
+                                                        : 'bg-black/30 text-zinc-400 border-white/10 hover:border-white/20 hover:text-zinc-200'
+                                                }`}
+                                            >
+                                                {isSelected && <Check size={12} className="text-red-400" />}
+                                                {tag}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+
+                                {/* Custom Tag Input */}
+                                <div className="flex gap-2">
+                                    <input
+                                        type="text"
+                                        value={customTagInput}
+                                        onChange={e => setCustomTagInput(e.target.value)}
+                                        onKeyDown={e => {
+                                            if (e.key === 'Enter') {
+                                                e.preventDefault();
+                                                handleAddCustomTag();
+                                            }
+                                        }}
+                                        placeholder="Add custom tag..."
+                                        className="flex-1 bg-black/30 border border-white/10 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-red-500/50"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={handleAddCustomTag}
+                                        className="px-3 py-1.5 bg-white/10 hover:bg-white/20 border border-white/10 rounded-xl text-xs text-white font-medium flex items-center gap-1"
+                                    >
+                                        <Plus size={14} /> Add
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Detailed Explanation Textarea */}
+                            <div>
+                                <label className="block text-xs font-bold text-zinc-400 uppercase tracking-wider mb-1">
+                                    Official Explanation Note for Citizen
+                                </label>
+                                <textarea
+                                    value={rejectionReason}
+                                    onChange={e => setRejectionReason(e.target.value)}
+                                    placeholder="Provide clear details on why this report was rejected (e.g. duplicate of ticket #102, unclear photo, out of city limits)..."
+                                    className="w-full bg-black/30 border border-white/10 rounded-xl p-3 text-sm text-white focus:outline-none focus:border-red-500/50 min-h-[100px]"
+                                />
+                            </div>
+
+                            <div className="pt-2 flex gap-3">
+                                <button
+                                    onClick={() => setRejectingId(null)}
+                                    className="flex-1 py-3 rounded-xl border border-white/10 text-white font-medium hover:bg-white/5 transition-colors"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={handleConfirmRejection}
+                                    disabled={isRejecting}
+                                    className="flex-1 py-3 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold hover:shadow-[0_0_20px_rgba(239,68,68,0.4)] transition-all disabled:opacity-50"
+                                >
+                                    {isRejecting ? 'Processing...' : 'Confirm Rejection'}
+                                </button>
+                            </div>
+
+                            <p className="text-[10px] text-zinc-500 text-center mt-1">
+                                Rejection details will be visible to the user on their dashboard in real-time.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                 <div>
                     <h1 className="text-3xl font-bold">Issues Management</h1>
@@ -322,7 +510,7 @@ export default function ComplaintsPage() {
                 </div>
 
                 <div className="flex items-center gap-2 bg-white/5 p-1 rounded-lg border border-white/10">
-                    {['all', 'pending', 'verified', 'resolved'].map(f => (
+                    {['all', 'pending', 'verified', 'resolved', 'rejected'].map(f => (
                         <button
                             key={f}
                             onClick={() => setFilter(f)}
@@ -594,6 +782,10 @@ export default function ComplaintsPage() {
                                                     <span className="flex items-center gap-1.5 text-[#00ff88] text-xs font-bold">
                                                         <CheckCircle size={14} /> Resolved
                                                     </span>
+                                                ) : (c.status === 'rejected' || c.verificationStatus === 'rejected') ? (
+                                                    <span className="flex items-center gap-1.5 text-red-400 text-xs font-bold">
+                                                        <XCircle size={14} /> Rejected
+                                                    </span>
                                                 ) : (
                                                     <span className="flex items-center gap-1.5 text-orange-400 text-xs font-bold">
                                                         <AlertTriangle size={14} /> Pending
@@ -723,6 +915,8 @@ export default function ComplaintsPage() {
                                             <div className="mt-1 flex items-center gap-2 font-medium">
                                                 {selectedComplaint.status === 'resolved' ? (
                                                     <span className="text-[#00ff88] flex items-center gap-1"><CheckCircle size={14} /> Resolved</span>
+                                                ) : selectedComplaint.status === 'rejected' || selectedComplaint.verificationStatus === 'rejected' ? (
+                                                    <span className="text-red-400 flex items-center gap-1"><XCircle size={14} /> Rejected</span>
                                                 ) : (
                                                     <span className="text-orange-400 flex items-center gap-1"><AlertTriangle size={14} /> Pending</span>
                                                 )}
@@ -787,6 +981,31 @@ export default function ComplaintsPage() {
                                                     </div>
                                                 </div>
                                             </section>
+
+                                            {(selectedComplaint.status === 'rejected' || selectedComplaint.verificationStatus === 'rejected') && (
+                                                <section className="bg-red-500/5 border border-red-500/20 rounded-xl p-4">
+                                                    <div className="flex items-center gap-2 text-red-400 font-bold mb-2">
+                                                        <XCircle size={16} /> Admin Rejection Record
+                                                    </div>
+                                                    {(selectedComplaint.rejectionTags?.length > 0 || selectedComplaint.rejection?.tags?.length > 0) && (
+                                                        <div className="flex flex-wrap gap-1 mb-3">
+                                                            {(selectedComplaint.rejectionTags || selectedComplaint.rejection?.tags || []).map((tag: string, idx: number) => (
+                                                                <span key={idx} className="bg-red-500/20 text-red-300 border border-red-500/30 text-[10px] font-bold px-2 py-0.5 rounded-md flex items-center gap-1">
+                                                                    <Tag size={10} /> {tag}
+                                                                </span>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                    <p className="text-xs text-zinc-300 whitespace-pre-wrap">
+                                                        {selectedComplaint.rejectionReason || selectedComplaint.rejection?.note || selectedComplaint.rejection?.reason || 'Report flagged or rejected by local authority.'}
+                                                    </p>
+                                                    {(selectedComplaint.rejectedAt || selectedComplaint.rejection?.rejectedAt) && (
+                                                        <div className="text-[10px] text-zinc-500 mt-2">
+                                                            Recorded: {new Date((selectedComplaint.rejectedAt?.seconds || selectedComplaint.rejection?.rejectedAt?.seconds || 0) * 1000).toLocaleString()}
+                                                        </div>
+                                                    )}
+                                                </section>
+                                            )}
 
                                             {complaints.filter(sub => sub.parentId === selectedComplaint.id).length > 0 && (
                                                 <section className="bg-white/5 border border-white/10 rounded-xl p-4">

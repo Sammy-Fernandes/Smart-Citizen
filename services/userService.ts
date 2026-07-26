@@ -1,6 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import firestore from '@react-native-firebase/firestore';
-import { db } from '../config/firebase';
+import { db, firestore } from '../config/firebase';
 
 export interface UserProfile {
   displayName: string;

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "152362654985",
+    "project_id": "civic-engagement-app-67289",
+    "storage_bucket": "civic-engagement-app-67289.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:152362654985:android:1a91295286475653b47f61",
+        "android_client_info": {
+          "package_name": "com.ved.civicengagement"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC_J29mrAmjAFOoUos65aMnH3_itnRNOqE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

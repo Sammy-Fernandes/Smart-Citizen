@@ -258,6 +258,7 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#000' },
   container: { padding: 20, paddingTop: 60, paddingBottom: 40 },
   header: { flexDirection: 'row', alignItems: 'center', gap: 16, marginBottom: 24 },
+  iconContainer: { borderRadius: 28 },
   iconGradient: { width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center' },
   title: { color: '#fff', fontSize: 24, fontWeight: '700' },
   subtitle: { color: 'rgba(255,255,255,0.6)', fontSize: 14 },

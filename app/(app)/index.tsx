@@ -831,7 +831,7 @@ export default function HomeScreen() {
 
             <TouchableOpacity
               style={styles.actionCard}
-              onPress={() => router.push('/(app)/chatbot')}
+              onPress={() => router.push('/(app)/chatbot' as any)}
             >
               <BlurView intensity={20} tint="dark" style={styles.actionCardBlur}>
                 <View style={styles.actionCardBorder} />

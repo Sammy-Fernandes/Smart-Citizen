@@ -1,9 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Alert } from 'react-native';
 import { createContext, ReactNode, useContext, useEffect, useState } from "react";
-import { auth, db } from "../config/firebase";
-import { FirebaseAuthTypes } from '@react-native-firebase/auth';
-import firestore from '@react-native-firebase/firestore';
+import { auth, db, firestore } from "../config/firebase";
+import type { FirebaseAuthTypes } from '@react-native-firebase/auth';
 
 export interface UserProfile {
   displayName: string;
@@ -74,7 +73,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       if (loading) setLoading(false);
     }, 10000);
 
-    const unsubscribe = auth.onAuthStateChanged(async (currentUser) => {
+    const unsubscribe = auth.onAuthStateChanged(async (currentUser: FirebaseAuthTypes.User | null) => {
       clearTimeout(safetyTimeout);
       if (currentUser) {
         setUser(currentUser);
@@ -226,7 +225,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         }
         console.log("[AUTH] Verifying real OTP...");
         const credential = await confirmationResult.confirm(code);
-        firebaseUser = credential.user;
+        firebaseUser = credential?.user;
       }
 
       if (!firebaseUser) throw new Error("Authentication failed");

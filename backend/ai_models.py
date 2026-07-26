@@ -1,8 +1,13 @@
+import os
+os.environ["HF_HOME"] = "/mnt/data/cache/huggingface"
+os.environ["TORCH_HOME"] = "/mnt/data/cache/torch"
+os.makedirs("/mnt/data/cache/huggingface", exist_ok=True)
+os.makedirs("/mnt/data/cache/torch", exist_ok=True)
+
 from ultralytics import YOLO
 import cv2
 import numpy as np
 import requests
-import os
 import torch
 from PIL import Image
 from transformers import CLIPProcessor, CLIPModel

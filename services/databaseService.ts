@@ -1,5 +1,5 @@
-import firestore, { FirebaseFirestoreTypes } from '@react-native-firebase/firestore';
-import { db } from '../config/firebase';
+import { db, firestore } from '../config/firebase';
+import type { FirebaseFirestoreTypes } from '@react-native-firebase/firestore';
 
 // Database Collections
 export const DB_COLLECTIONS = {
@@ -20,7 +20,7 @@ export interface Complaint {
   title: string;
   description: string;
   category: string;
-  status: 'pending' | 'in-progress' | 'resolved';
+  status: 'pending' | 'in-progress' | 'in_progress' | 'resolved' | 'rejected';
   priority: 'low' | 'medium' | 'high';
   location: {
     address: string;
@@ -40,6 +40,22 @@ export interface Complaint {
   resolvedAt?: any;
   assignedTo?: string;
   resolutionNotes?: string;
+  resolution?: {
+    note?: string;
+    imageUrl?: string;
+    resolvedAt?: any;
+  };
+  rejectionReason?: string;
+  rejectionTags?: string[];
+  rejectedAt?: any;
+  rejectedBy?: string;
+  rejection?: {
+    reason?: string;
+    note?: string;
+    tags?: string[];
+    rejectedAt?: any;
+    rejectedBy?: string;
+  };
   verificationStatus?: 'verified' | 'rejected' | 'unverified';
   verificationConfidence?: number;
   detectedIssues?: string[];
@@ -205,9 +221,9 @@ export const getUserComplaints = async (userId: string, limitCount: number = 10)
       .limit(limitCount)
       .get();
       
-    const complaints = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Complaint));
+    const complaints = querySnapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() } as Complaint));
     
-    return complaints.sort((a, b) => {
+    return complaints.sort((a: any, b: any) => {
       const aTime = a.createdAt?.toMillis?.() ?? 0;
       const bTime = b.createdAt?.toMillis?.() ?? 0;
       return bTime - aTime;
@@ -225,7 +241,7 @@ export const getAllComplaints = async (limitCount: number = 20): Promise<Complai
       .limit(limitCount)
       .get();
 
-    return querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Complaint));
+    return querySnapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() } as Complaint));
   } catch (error) {
     console.warn('Error fetching all complaints:', error);
     return [];
@@ -278,9 +294,9 @@ export const getUserSuggestions = async (userId: string, limitCount: number = 10
       .limit(limitCount)
       .get();
       
-    const suggestions = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Suggestion));
+    const suggestions = querySnapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() } as Suggestion));
     
-    return suggestions.sort((a, b) => {
+    return suggestions.sort((a: any, b: any) => {
       const aTime = a.createdAt?.toMillis?.() ?? 0;
       const bTime = b.createdAt?.toMillis?.() ?? 0;
       return bTime - aTime;
@@ -298,7 +314,7 @@ export const getAllSuggestions = async (limitCount: number = 20): Promise<Sugges
       .limit(limitCount)
       .get();
 
-    return querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Suggestion));
+    return querySnapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() } as Suggestion));
   } catch (error) {
     console.warn('Error fetching all suggestions:', error);
     return [];
@@ -365,11 +381,11 @@ export const getCategories = async (type?: 'complaint' | 'suggestion'): Promise<
       querySnapshot = await db.collection(DB_COLLECTIONS.CATEGORIES).get();
     }
 
-    const categories = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Category));
+    const categories = querySnapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() } as Category));
     
     // Deduplicate by name to prevent UI bugs if DB has duplicates
     const seen = new Set();
-    return categories.filter(cat => {
+    return categories.filter((cat: Category) => {
       if (seen.has(cat.name)) return false;
       seen.add(cat.name);
       return true;
@@ -384,7 +400,7 @@ export const getCategories = async (type?: 'complaint' | 'suggestion'): Promise<
 export const getUserStats = async (userId: string) => {
   try {
     if (!userId || typeof userId !== 'string' || userId.trim() === '') {
-      return { totalComplaints: 0, resolvedComplaints: 0, pendingComplaints: 0, totalSuggestions: 0 };
+      return { totalComplaints: 0, resolvedComplaints: 0, rejectedComplaints: 0, inProgressComplaints: 0, pendingComplaints: 0, totalSuggestions: 0 };
     }
 
     const [complaints, suggestions] = await Promise.all([
@@ -395,12 +411,14 @@ export const getUserStats = async (userId: string) => {
     return {
       totalComplaints: complaints.length,
       resolvedComplaints: complaints.filter(c => c.status === 'resolved').length,
-      pendingComplaints: complaints.filter(c => c.status === 'pending').length,
+      rejectedComplaints: complaints.filter(c => c.status === 'rejected' || c.verificationStatus === 'rejected').length,
+      inProgressComplaints: complaints.filter(c => c.status === 'in-progress' || c.status === 'in_progress').length,
+      pendingComplaints: complaints.filter(c => c.status === 'pending' || !c.status).length,
       totalSuggestions: suggestions.length
     };
   } catch (error) {
     console.warn('Error fetching user stats:', error);
-    return { totalComplaints: 0, resolvedComplaints: 0, pendingComplaints: 0, totalSuggestions: 0 };
+    return { totalComplaints: 0, resolvedComplaints: 0, rejectedComplaints: 0, inProgressComplaints: 0, pendingComplaints: 0, totalSuggestions: 0 };
   }
 };
 
@@ -450,7 +468,7 @@ export const deleteComplaint = async (userId: string, complaintId: string): Prom
 export const getBroadcasts = async (): Promise<any[]> => {
   try {
     const snapshot = await db.collection('broadcasts').where('active', '==', true).get();
-    const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    const items = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
 
     return items.sort((a: any, b: any) => {
       const aTime = a.createdAt?.seconds ?? 0;
@@ -489,9 +507,9 @@ export const getDistrictMessages = (district: string, callback: (messages: any[]
   return db.collection('messages')
     .where('district', '==', district)
     .limit(50)
-    .onSnapshot(snapshot => {
+    .onSnapshot((snapshot: any) => {
       try {
-        const msgs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        const msgs = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
         // Sort client-side to avoid requiring a Firestore composite index
         const sorted = msgs.sort((a: any, b: any) => {
           const aT = a.createdAt?.seconds ?? 0;
@@ -503,7 +521,7 @@ export const getDistrictMessages = (district: string, callback: (messages: any[]
         console.warn('Message processing error:', e);
         callback([]);
       }
-    }, error => {
+    }, (error: any) => {
       console.warn('Message stream error:', error);
       callback([]);
     });
@@ -535,9 +553,9 @@ export const getDistrictPolls = (district: string, callback: (polls: any[]) => v
   return db.collection('polls')
     .where('district', '==', district)
     .where('active', '==', true)
-    .onSnapshot(snapshot => {
+    .onSnapshot((snapshot: any) => {
       try {
-        const polls = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        const polls = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
         // Sort client-side to avoid requiring a Firestore composite index
         const sorted = polls.sort((a: any, b: any) => {
           const aT = a.createdAt?.seconds ?? 0;
@@ -549,7 +567,7 @@ export const getDistrictPolls = (district: string, callback: (polls: any[]) => v
         console.warn('Poll processing error:', e);
         callback([]);
       }
-    }, error => {
+    }, (error: any) => {
       console.warn('Poll stream error:', error);
       callback([]);
     });
@@ -616,7 +634,7 @@ export const getComments = async (itemId: string, limitCount: number = 50): Prom
       .limit(limitCount)
       .get();
 
-    const comments: any[] = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    const comments: any[] = querySnapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
 
     return comments.sort((a, b) => {
       if (a.isAdmin && !b.isAdmin) return -1;

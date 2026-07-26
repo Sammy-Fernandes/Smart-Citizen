@@ -27,13 +27,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from google.auth import credentials as google_auth_creds
+
 # Initialize Firebase Admin
 cred_path = os.path.join(os.path.dirname(__file__), 'serviceAccountKey.json')
 if os.path.exists(cred_path):
     cred = credentials.Certificate(cred_path)
     firebase_admin.initialize_app(cred)
 else:
-    print("WARNING: serviceAccountKey.json not found.")
+    print("WARNING: serviceAccountKey.json not found. Initializing with AnonymousCredentials for local dev mode...")
+    anon_cred = google_auth_creds.AnonymousCredentials()
+    firebase_admin.initialize_app(credential=anon_cred, options={'projectId': 'civic-engagement-app-67289'})
 
 db = firestore.client()
 
@@ -427,19 +431,19 @@ def on_broadcasts_snapshot(col_snapshot, changes, read_time):
             process_broadcast(change.document.id, change.document.to_dict())
 
 def start_listeners():
-    # Re-verify all items on startup first (to avoid grpc threading deadlock with listeners)
-    print("🔍 Checking for existing reports to re-verify...")
     try:
+        # Re-verify all items on startup first (to avoid grpc threading deadlock with listeners)
+        print("🔍 Checking for existing reports to re-verify...")
         all_complaints = db.collection('complaints').get()
         for doc in all_complaints:
             data = doc.to_dict()
             process_complaint(doc.id, data, doc.reference)
-    except Exception as e:
-        print(f"Error during startup: {e}")
 
-    print("Starting Firestore listeners...")
-    db.collection('complaints').on_snapshot(on_complaints_snapshot)
-    db.collection('broadcasts').on_snapshot(on_broadcasts_snapshot)
+        print("Starting Firestore listeners...")
+        db.collection('complaints').on_snapshot(on_complaints_snapshot)
+        db.collection('broadcasts').on_snapshot(on_broadcasts_snapshot)
+    except Exception as e:
+        print(f"⚠️ Firestore listeners operating in standby mode: {e}")
 
 # Start listeners in background
 listener_thread = threading.Thread(target=start_listeners, daemon=True)
