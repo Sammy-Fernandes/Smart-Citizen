@@ -436,12 +436,12 @@ PROJECT_ID = "civic-engagement-app-67289"
 
 def normalize_category(cat: str) -> str:
     c = cat.lower().strip()
-    if any(k in c for k in ['pothole', 'road', 'infrastructure', 'crack', 'asphalt', 'surface']):
-        return 'infrastructure'
-    if any(k in c for k in ['garbage', 'trash', 'sanitation', 'litter', 'waste', 'dump', 'overflow']):
+    if any(k in c for k in ['garbage', 'trash', 'sanitation', 'litter', 'waste', 'dump', 'debris', 'bin']):
         return 'sanitation'
     if any(k in c for k in ['water', 'drain', 'leak', 'sewage', 'pipe', 'flood']):
         return 'water'
+    if any(k in c for k in ['pothole', 'road', 'infrastructure', 'crack', 'asphalt', 'surface', 'safety']):
+        return 'infrastructure'
     if any(k in c for k in ['electric', 'light', 'lamp', 'wire', 'pole']):
         return 'electricity'
     return c
@@ -727,6 +727,7 @@ class RealtimeRestWorker:
                 norm_cat = normalize_category(category if category else title)
                 status = fields.get('status', {}).get('stringValue', '')
                 v_status = fields.get('verificationStatus', {}).get('stringValue', '')
+                rejection = fields.get('rejectionReason', {}).get('stringValue', None)
                 severity = int(fields.get('severityScore', {}).get('integerValue', fields.get('severityScore', {}).get('doubleValue', 50)))
                 loc_map = fields.get('location', {}).get('mapValue', {}).get('fields', {})
                 try:
@@ -741,7 +742,7 @@ class RealtimeRestWorker:
 
                 parsed_docs.append({
                     'doc_id': doc_id, 'title': title, 'category': category, 'norm_cat': norm_cat,
-                    'status': status, 'v_status': v_status, 'severity': severity,
+                    'status': status, 'v_status': v_status, 'rejection': rejection, 'severity': severity,
                     'lat': lat, 'lon': lon, 'image_urls': image_urls, 'embedding': embedding,
                     'parent_id': None
                 })
@@ -750,14 +751,14 @@ class RealtimeRestWorker:
             clustered_count = 0
 
             for i, master in enumerate(parsed_docs):
-                if master['parent_id'] or master['status'] == 'resolved' or master['status'] == 'rejected' or master['v_status'] == 'rejected':
+                if master['parent_id'] or master['status'] == 'resolved' or master['status'] == 'rejected' or master['v_status'] == 'rejected' or master['rejection']:
                     continue
 
                 master_id = master['doc_id']
                 child_ids = []
 
                 for j, candidate in enumerate(parsed_docs):
-                    if i == j or candidate['parent_id'] or candidate['status'] == 'resolved' or candidate['status'] == 'rejected' or candidate['v_status'] == 'rejected':
+                    if i == j or candidate['parent_id'] or candidate['status'] == 'resolved' or candidate['status'] == 'rejected' or candidate['v_status'] == 'rejected' or candidate['rejection']:
                         continue
 
                     # RULE 1: Mandatory Category Match
@@ -771,7 +772,7 @@ class RealtimeRestWorker:
                     if dist > 25.0:
                         continue
 
-                    # RULE 3: Visual Proof Match (Exact Image URL OR CLIP Cosine Similarity >= 0.82)
+                    # RULE 3: Exact Image Match OR Cosine Sim >= 0.78 OR Same Physical Spot (Dist <= 20m)
                     exact_match = master['image_urls'] and candidate['image_urls'] and any(u in candidate['image_urls'] for u in master['image_urls'])
                     sim = 0.0
                     if master['embedding'] and candidate['embedding'] and len(master['embedding']) == len(candidate['embedding']):
@@ -780,7 +781,9 @@ class RealtimeRestWorker:
                         norm_b = np.linalg.norm(candidate['embedding'])
                         sim = dot / (norm_a * norm_b) if norm_a and norm_b else 0.0
 
-                    if exact_match or (sim >= 0.82):
+                    is_dup = exact_match or (sim >= 0.78) or (dist <= 20.0)
+
+                    if is_dup:
                         child_id = candidate['doc_id']
                         candidate['parent_id'] = master_id
                         child_ids.append(child_id)
