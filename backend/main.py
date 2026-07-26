@@ -481,6 +481,18 @@ class RealtimeRestWorker:
             print(f"❌ RealtimeWorker Auth Token Error: {e}")
             return None
 
+    def clear_doc_field(self, doc_id: str, field_name: str):
+        token = self.get_id_token()
+        if not token: return False
+        url = f"https://firestore.googleapis.com/v1/projects/{self.project_id}/databases/(default)/documents/complaints/{doc_id}?updateMask.fieldPaths={field_name}"
+        headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+        try:
+            r = requests.patch(url, json={'fields': {}}, headers=headers, timeout=10)
+            return r.status_code == 200
+        except Exception as e:
+            print(f"❌ RealtimeWorker clear field failed [{doc_id}.{field_name}]: {e}")
+            return False
+
     def update_doc_fields(self, doc_id: str, fields_dict: dict):
         token = self.get_id_token()
         if not token: return False
@@ -493,7 +505,9 @@ class RealtimeRestWorker:
         firestore_fields = {}
 
         for k, v in fields_dict.items():
-            if isinstance(v, bool):
+            if v is None:
+                firestore_fields[k] = {'nullValue': None}
+            elif isinstance(v, bool):
                 firestore_fields[k] = {'booleanValue': v}
             elif isinstance(v, (int, float)):
                 if isinstance(v, int):
@@ -777,8 +791,8 @@ class RealtimeRestWorker:
                     if parent_doc['norm_cat'] != d['norm_cat'] or parent_doc['status'] != d['status'] or d['status'] == 'resolved' or parent_doc['status'] == 'resolved':
                         print(f"🧹 [Cleanup Stale Link] Unlinking {d['doc_id']} ('{d['title']}', status: {d['status']}) from Master {parent_doc['doc_id']} ('{parent_doc['title']}', status: {parent_doc['status']})")
                         d['parent_id'] = None
-                        clear_url = f"https://firestore.googleapis.com/v1/projects/{self.project_id}/databases/(default)/documents/complaints/{d['doc_id']}?updateMask.fieldPaths=parentId"
-                        requests.patch(clear_url, json={'fields': {}}, headers=patch_headers)
+                        self.clear_doc_field(d['doc_id'], 'parentId')
+
             # Phase 2: Dynamic Connected-Components (Union-Find) Graph Clustering
             active_candidates = [d for d in parsed_docs if d['status'] == 'pending' and d['v_status'] != 'rejected' and not d['rejection']]
 
@@ -829,8 +843,7 @@ class RealtimeRestWorker:
             for root_id, members in components.items():
                 if len(members) <= 1:
                     m = members[0]
-                    patch_url = f"https://firestore.googleapis.com/v1/projects/{self.project_id}/databases/(default)/documents/complaints/{m['doc_id']}?updateMask.fieldPaths=parentId"
-                    requests.patch(patch_url, json={'fields': {}}, headers=patch_headers)
+                    self.clear_doc_field(m['doc_id'], 'parentId')
                     continue
 
                 members.sort(key=lambda x: (-x['severity'], x['doc_id']))
@@ -838,8 +851,7 @@ class RealtimeRestWorker:
                 master_id = master['doc_id']
                 children = members[1:]
 
-                patch_m_url = f"https://firestore.googleapis.com/v1/projects/{self.project_id}/databases/(default)/documents/complaints/{master_id}?updateMask.fieldPaths=parentId"
-                requests.patch(patch_m_url, json={'fields': {}}, headers=patch_headers)
+                self.clear_doc_field(master_id, 'parentId')
 
                 child_severities = []
                 for child in children:
@@ -847,13 +859,11 @@ class RealtimeRestWorker:
                     child_severities.append(child['severity'])
                     clustered_count += 1
                     print(f"🔗 [Graph Clustering] Linked child {child_id} ('{child['title']}') -> Master {master_id} ('{master['title']}') [Cat: {master['norm_cat']}]")
-                    patch_c_url = f"https://firestore.googleapis.com/v1/projects/{self.project_id}/databases/(default)/documents/complaints/{child_id}?updateMask.fieldPaths=parentId"
-                    requests.patch(patch_c_url, json={'fields': {'parentId': {'stringValue': master_id}}}, headers=patch_headers)
+                    self.update_doc_fields(child_id, {'parentId': master_id})
 
                 all_severities = [master['severity']] + child_severities
                 comb_severity = min(100, max(all_severities) + min(20, len(children) * 5))
-                patch_sev_url = f"https://firestore.googleapis.com/v1/projects/{self.project_id}/databases/(default)/documents/complaints/{master_id}?updateMask.fieldPaths=combinedSeverity"
-                requests.patch(patch_sev_url, json={'fields': {'combinedSeverity': {'integerValue': str(comb_severity)}}}, headers=patch_headers)
+                self.update_doc_fields(master_id, {'combinedSeverity': comb_severity})
 
             print(f"✅ [Dynamic Graph Sweep] Completed! Total duplicates linked: {clustered_count}. Shifting to Real-Time 3s Polling...")
 
