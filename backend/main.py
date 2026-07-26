@@ -640,8 +640,77 @@ class RealtimeRestWorker:
 
         return None
 
+    def run_duplicate_scan(self):
+        print("🔍 [Worker] Running initial duplicate linking scan on existing reports...")
+        token = self.get_id_token()
+        if not token: return
+
+        url = f"https://firestore.googleapis.com/v1/projects/{self.project_id}/databases/(default)/documents/complaints"
+        headers = {'Authorization': f'Bearer {token}'}
+
+        try:
+            r = requests.get(url, headers=headers, timeout=10)
+            if r.status_code != 200: return
+            documents = r.json().get('documents', [])
+
+            parsed_docs = []
+            for doc in documents:
+                name = doc.get('name', '')
+                doc_id = name.split('/')[-1]
+                fields = doc.get('fields', {})
+                title = fields.get('title', {}).get('stringValue', '')
+                parent_id = fields.get('parentId', {}).get('stringValue', None)
+                status = fields.get('status', {}).get('stringValue', '')
+                v_status = fields.get('verificationStatus', {}).get('stringValue', '')
+                loc_map = fields.get('location', {}).get('mapValue', {}).get('fields', {})
+                try:
+                    lat = float(loc_map.get('latitude', {}).get('doubleValue', loc_map.get('latitude', {}).get('integerValue', 0)))
+                    lon = float(loc_map.get('longitude', {}).get('doubleValue', loc_map.get('longitude', {}).get('integerValue', 0)))
+                except: lat, lon = 0.0, 0.0
+
+                img_array = fields.get('imageUrls', {}).get('arrayValue', {}).get('values', [])
+                image_urls = [item.get('stringValue') for item in img_array if item.get('stringValue')]
+                old_embed_values = fields.get('visualEmbedding', {}).get('arrayValue', {}).get('values', [])
+                embedding = [float(v.get('doubleValue', v.get('integerValue', 0))) for v in old_embed_values]
+
+                parsed_docs.append({
+                    'doc_id': doc_id, 'title': title, 'parent_id': parent_id,
+                    'status': status, 'v_status': v_status, 'lat': lat, 'lon': lon,
+                    'image_urls': image_urls, 'embedding': embedding
+                })
+
+            for i, d1 in enumerate(parsed_docs):
+                if d1['parent_id'] or d1['status'] == 'resolved' or d1['v_status'] == 'rejected': continue
+                for j, d2 in enumerate(parsed_docs):
+                    if i == j: continue
+                    if d2['parent_id'] or d2['status'] == 'resolved' or d2['v_status'] == 'rejected': continue
+                    if d1['lat'] == 0 or d1['lon'] == 0 or d2['lat'] == 0 or d2['lon'] == 0: continue
+
+                    dist = calculate_distance(d1['lat'], d1['lon'], d2['lat'], d2['lon'])
+                    is_dup = False
+                    if d1['image_urls'] and d2['image_urls'] and any(u in d2['image_urls'] for u in d1['image_urls']):
+                        is_dup = True
+                    elif dist < 50:
+                        is_dup = True
+                    elif dist < 250 and d1['embedding'] and d2['embedding'] and len(d1['embedding']) == len(d2['embedding']):
+                        import numpy as np
+                        dot = np.dot(d1['embedding'], d2['embedding'])
+                        norm_a = np.linalg.norm(d1['embedding'])
+                        norm_b = np.linalg.norm(d2['embedding'])
+                        sim = dot / (norm_a * norm_b) if norm_a and norm_b else 0
+                        if sim >= 0.70: is_dup = True
+
+                    if is_dup:
+                        print(f"🔗 [Duplicate Scan] Linked {d2['doc_id']} ('{d2['title']}') -> Master {d1['doc_id']} ('{d1['title']}')")
+                        self.update_doc_fields(d2['doc_id'], {'parentId': d1['doc_id']})
+                        d2['parent_id'] = d1['doc_id']
+        except Exception as e:
+            print(f"⚠️ Initial duplicate scan error: {e}")
+
     def start_loop(self):
         print("⚡ Real-time Firestore REST Worker active (Polling every 3s)...")
+        time.sleep(2)
+        self.run_duplicate_scan()
         while True:
             try:
                 self.poll_and_process()
