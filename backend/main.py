@@ -435,18 +435,31 @@ API_KEY = "AIzaSyC_J29mrAmjAFOoUos65aMnH3_itnRNOqE"
 PROJECT_ID = "civic-engagement-app-67289"
 
 def normalize_category(cat: str, title: str = '', issues: str = '') -> str:
-    text = (str(cat) + ' ' + str(title) + ' ' + str(issues)).lower().strip()
-    if any(k in text for k in ['sewage', 'drain overflow', 'pipe leak', 'water overflow', 'flooding']):
-        return 'water:sewage'
-    if any(k in text for k in ['garbage', 'trash', 'sanitation', 'litter', 'waste', 'dump', 'debris', 'bin']):
+    # 1. First check title & issues for SPECIFIC problem keywords
+    specific_text = (str(title) + ' ' + str(issues)).lower().strip()
+    if any(k in specific_text for k in ['garbage', 'trash', 'sanitation', 'litter', 'waste', 'dump', 'debris', 'bin']):
         return 'sanitation:solid'
-    if any(k in text for k in ['water', 'drain', 'leak', 'sewage', 'pipe', 'flood']):
+    if any(k in specific_text for k in ['sewage', 'drain overflow', 'pipe leak', 'water overflow', 'flooding']):
+        return 'water:sewage'
+    if any(k in specific_text for k in ['water', 'drain', 'leak', 'pipe', 'flood']):
         return 'water:supply'
-    if any(k in text for k in ['pothole', 'road', 'infrastructure', 'crack', 'asphalt', 'surface']):
+    if any(k in specific_text for k in ['pothole', 'road', 'crack', 'asphalt', 'surface']):
         return 'infrastructure:road'
-    if any(k in text for k in ['electric', 'light', 'lamp', 'wire', 'pole']):
+    if any(k in specific_text for k in ['electric', 'light', 'lamp', 'wire', 'pole']):
         return 'electricity'
-    return text
+
+    # 2. Fall back to category field if title/issues didn't match specific keywords
+    cat_text = str(cat).lower().strip()
+    if any(k in cat_text for k in ['garbage', 'trash', 'sanitation', 'litter', 'waste']):
+        return 'sanitation:solid'
+    if any(k in cat_text for k in ['water', 'drain', 'sewage', 'leak', 'pipe']):
+        return 'water:supply'
+    if any(k in cat_text for k in ['pothole', 'road', 'infrastructure', 'crack', 'asphalt', 'surface']):
+        return 'infrastructure:road'
+    if any(k in cat_text for k in ['electric', 'light', 'lamp', 'wire', 'pole']):
+        return 'electricity'
+
+    return specific_text or cat_text
 
 class RealtimeRestWorker:
     def __init__(self, api_key: str, project_id: str):
@@ -742,14 +755,27 @@ class RealtimeRestWorker:
                 old_embed_values = fields.get('visualEmbedding', {}).get('arrayValue', {}).get('values', [])
                 embedding = [float(v.get('doubleValue', v.get('integerValue', 0))) for v in old_embed_values]
 
+                parent_id = fields.get('parentId', {}).get('stringValue', None)
+
                 parsed_docs.append({
                     'doc_id': doc_id, 'title': title, 'category': category, 'norm_cat': norm_cat,
                     'status': status, 'v_status': v_status, 'rejection': rejection, 'severity': severity,
                     'lat': lat, 'lon': lon, 'image_urls': image_urls, 'embedding': embedding,
-                    'parent_id': None
+                    'parent_id': parent_id
                 })
 
             patch_headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+
+            # Cleanup stale cross-category parent links
+            doc_map = {d['doc_id']: d for d in parsed_docs}
+            for d in parsed_docs:
+                if d['parent_id'] and d['parent_id'] in doc_map:
+                    parent_doc = doc_map[d['parent_id']]
+                    if parent_doc['norm_cat'] != d['norm_cat']:
+                        print(f"🧹 [Cleanup Stale Link] Unlinking {d['doc_id']} ('{d['title']}', Cat: {d['norm_cat']}) from mismatched Master {parent_doc['doc_id']} ('{parent_doc['title']}', Cat: {parent_doc['norm_cat']})")
+                        d['parent_id'] = None
+                        clear_url = f"https://firestore.googleapis.com/v1/projects/{self.project_id}/databases/(default)/documents/complaints/{d['doc_id']}?updateMask.fieldPaths=parentId"
+                        requests.patch(clear_url, json={'fields': {}}, headers=patch_headers)
             clustered_count = 0
 
             for i, master in enumerate(parsed_docs):
