@@ -159,14 +159,21 @@ class VerificationModel:
 
         print("Loading CLIP model (openai/clip-vit-base-patch32)...")
         try:
-            self.clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+            self.clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32", use_safetensors=True)
             self.clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
             self.clip_model.to(self.device)
             print(f"✅ CLIP loaded on {self.device}")
         except Exception as e:
-            print(f"❌ Error loading CLIP: {e}")
-            self.clip_model = None
+            try:
+                self.clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+                self.clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+                self.device = "cuda" if torch.cuda.is_available() else "cpu"
+                self.clip_model.to(self.device)
+                print(f"✅ CLIP loaded on {self.device}")
+            except Exception as e2:
+                print(f"❌ Error loading CLIP: {e2}")
+                self.clip_model = None
 
         self.pothole_model = None
         if os.path.exists('yolov8n-pothole-segmentation.pt'):
