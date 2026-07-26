@@ -433,6 +433,18 @@ def on_broadcasts_snapshot(col_snapshot, changes, read_time):
 API_KEY = "AIzaSyC_J29mrAmjAFOoUos65aMnH3_itnRNOqE"
 PROJECT_ID = "civic-engagement-app-67289"
 
+def normalize_category(cat: str) -> str:
+    c = cat.lower().strip()
+    if any(k in c for k in ['pothole', 'road', 'infrastructure', 'crack', 'asphalt', 'surface']):
+        return 'infrastructure'
+    if any(k in c for k in ['garbage', 'trash', 'sanitation', 'litter', 'waste', 'dump', 'overflow']):
+        return 'sanitation'
+    if any(k in c for k in ['water', 'drain', 'leak', 'sewage', 'pipe', 'flood']):
+        return 'water'
+    if any(k in c for k in ['electric', 'light', 'lamp', 'wire', 'pole']):
+        return 'electricity'
+    return c
+
 class RealtimeRestWorker:
     def __init__(self, api_key: str, project_id: str):
         self.api_key = api_key
@@ -538,11 +550,11 @@ class RealtimeRestWorker:
                     location=location
                 )
 
-                # Duplicate matching (location + visual similarity)
+                # Strict Duplicate Matching
                 parent_id = self.find_duplicate_master(
                     lat=location['latitude'],
                     lon=location['longitude'],
-                    category=category,
+                    category=category if category else title,
                     new_embedding=result.get('embedding'),
                     image_urls=image_urls,
                     exclude_doc_id=doc_id
@@ -578,6 +590,8 @@ class RealtimeRestWorker:
         url = f"https://firestore.googleapis.com/v1/projects/{self.project_id}/databases/(default)/documents/complaints"
         headers = {'Authorization': f'Bearer {token}'}
 
+        norm_cat = normalize_category(category)
+
         try:
             r = requests.get(url, headers=headers, timeout=10)
             if r.status_code != 200: return None
@@ -598,14 +612,14 @@ class RealtimeRestWorker:
                 if status == 'resolved' or fields.get('verificationStatus', {}).get('stringValue', '') == 'rejected':
                     continue
 
-                # 1. Exact Image Match
-                img_array = fields.get('imageUrls', {}).get('arrayValue', {}).get('values', [])
-                existing_imgs = [item.get('stringValue') for item in img_array if item.get('stringValue')]
-                if image_urls and existing_imgs and any(u in existing_imgs for u in image_urls):
-                    print(f"🔗 [Duplicate Match] Exact image match between {exclude_doc_id} and master {doc_id}")
-                    return doc_id
+                # RULE 1: Category Match
+                doc_title = fields.get('title', {}).get('stringValue', '')
+                doc_cat = fields.get('category', {}).get('stringValue', '')
+                doc_norm_cat = normalize_category(doc_cat if doc_cat else doc_title)
+                if norm_cat != doc_norm_cat:
+                    continue
 
-                # 2. Location & Visual Similarity
+                # RULE 2: Distance <= 25 meters
                 loc_map = fields.get('location', {}).get('mapValue', {}).get('fields', {})
                 try:
                     doc_lat = float(loc_map.get('latitude', {}).get('doubleValue', loc_map.get('latitude', {}).get('integerValue', 0)))
@@ -617,31 +631,35 @@ class RealtimeRestWorker:
                     continue
 
                 dist = calculate_distance(lat, lon, doc_lat, doc_lon)
+                if dist > 25.0:
+                    continue
+
+                # RULE 3: Visual Proof Match (Exact Image URL OR CLIP Cosine Similarity >= 0.82)
+                img_array = fields.get('imageUrls', {}).get('arrayValue', {}).get('values', [])
+                existing_imgs = [item.get('stringValue') for item in img_array if item.get('stringValue')]
+                exact_match = image_urls and existing_imgs and any(u in existing_imgs for u in image_urls)
 
                 old_embed_values = fields.get('visualEmbedding', {}).get('arrayValue', {}).get('values', [])
                 old_embedding = [float(v.get('doubleValue', v.get('integerValue', 0))) for v in old_embed_values]
 
+                sim = 0.0
                 if new_embedding is not None and old_embedding and len(old_embedding) == len(new_embedding):
-                    import numpy as np
                     dot = np.dot(new_embedding, old_embedding)
                     norm_a = np.linalg.norm(new_embedding)
                     norm_b = np.linalg.norm(old_embedding)
-                    similarity = dot / (norm_a * norm_b) if norm_a and norm_b else 0
-                    if dist < 250 and similarity >= 0.70:
-                        print(f"🔗 [Duplicate Match] Visual similarity {similarity:.2f} & dist {dist:.1f}m -> master {doc_id}")
-                        return doc_id
+                    sim = dot / (norm_a * norm_b) if norm_a and norm_b else 0
 
-                if dist < 50:
-                    print(f"🔗 [Duplicate Match] Proximity match ({dist:.1f}m) -> master {doc_id}")
+                if exact_match or (sim >= 0.82):
+                    print(f"🔗 [Strict Duplicate Match] Category '{norm_cat}' | Dist {dist:.1f}m | Sim {sim:.2f} -> Master {doc_id}")
                     return doc_id
 
         except Exception as e:
-            print(f"⚠️ Duplicate check error: {e}")
+            print(f"⚠️ Strict duplicate check error: {e}")
 
         return None
 
-    def run_duplicate_scan(self):
-        print("🔍 [Worker] Running initial duplicate linking scan on existing reports...")
+    def run_full_initialization_and_clustering(self):
+        print("🔍 [Startup Sweep] Scanning and catching up on all database reports...")
         token = self.get_id_token()
         if not token: return
 
@@ -653,15 +671,61 @@ class RealtimeRestWorker:
             if r.status_code != 200: return
             documents = r.json().get('documents', [])
 
+            # Phase 1: Process any un-AI-processed reports
+            for doc in documents:
+                name = doc.get('name', '')
+                doc_id = name.split('/')[-1]
+                fields = doc.get('fields', {})
+
+                ai_processed = fields.get('aiProcessed', {}).get('booleanValue', False)
+                if not ai_processed:
+                    title = fields.get('title', {}).get('stringValue', '')
+                    description = fields.get('description', {}).get('stringValue', '')
+                    category = fields.get('category', {}).get('stringValue', '')
+                    img_array = fields.get('imageUrls', {}).get('arrayValue', {}).get('values', [])
+                    image_urls = [item.get('stringValue') for item in img_array if item.get('stringValue')]
+                    loc_map = fields.get('location', {}).get('mapValue', {}).get('fields', {})
+                    location = {
+                        'address': loc_map.get('address', {}).get('stringValue', ''),
+                        'latitude': float(loc_map.get('latitude', {}).get('doubleValue', loc_map.get('latitude', {}).get('integerValue', 0))),
+                        'longitude': float(loc_map.get('longitude', {}).get('doubleValue', loc_map.get('longitude', {}).get('integerValue', 0))),
+                    }
+
+                    if image_urls:
+                        print(f"⚡ [Offline Catch-Up] Processing report: {doc_id} ('{title}')")
+                        result = verification_model.verify_complaint(
+                            title=title, description=description, category=category,
+                            image_urls=image_urls, location=location
+                        )
+                        payload = {
+                            'verificationStatus': result['status'],
+                            'verificationConfidence': float(result['confidence']),
+                            'detectedIssues': result['issues'],
+                            'verificationReason': result['reason'],
+                            'priority': int(result['priority']),
+                            'severityScore': int(result.get('severity', 0)),
+                            'aiProcessed': True
+                        }
+                        if result.get('embedding'):
+                            payload['visualEmbedding'] = result['embedding']
+                        self.update_doc_fields(doc_id, payload)
+
+            # Re-fetch after catch-up
+            r2 = requests.get(url, headers=headers, timeout=10)
+            documents = r2.json().get('documents', []) if r2.status_code == 200 else documents
+
+            # Phase 2: Perform Strict Full-Database Clustering Sweep
             parsed_docs = []
             for doc in documents:
                 name = doc.get('name', '')
                 doc_id = name.split('/')[-1]
                 fields = doc.get('fields', {})
                 title = fields.get('title', {}).get('stringValue', '')
-                parent_id = fields.get('parentId', {}).get('stringValue', None)
+                category = fields.get('category', {}).get('stringValue', '')
+                norm_cat = normalize_category(category if category else title)
                 status = fields.get('status', {}).get('stringValue', '')
                 v_status = fields.get('verificationStatus', {}).get('stringValue', '')
+                severity = int(fields.get('severityScore', {}).get('integerValue', fields.get('severityScore', {}).get('doubleValue', 50)))
                 loc_map = fields.get('location', {}).get('mapValue', {}).get('fields', {})
                 try:
                     lat = float(loc_map.get('latitude', {}).get('doubleValue', loc_map.get('latitude', {}).get('integerValue', 0)))
@@ -674,43 +738,70 @@ class RealtimeRestWorker:
                 embedding = [float(v.get('doubleValue', v.get('integerValue', 0))) for v in old_embed_values]
 
                 parsed_docs.append({
-                    'doc_id': doc_id, 'title': title, 'parent_id': parent_id,
-                    'status': status, 'v_status': v_status, 'lat': lat, 'lon': lon,
-                    'image_urls': image_urls, 'embedding': embedding
+                    'doc_id': doc_id, 'title': title, 'category': category, 'norm_cat': norm_cat,
+                    'status': status, 'v_status': v_status, 'severity': severity,
+                    'lat': lat, 'lon': lon, 'image_urls': image_urls, 'embedding': embedding,
+                    'parent_id': None
                 })
 
-            for i, d1 in enumerate(parsed_docs):
-                if d1['parent_id'] or d1['status'] == 'resolved' or d1['v_status'] == 'rejected': continue
-                for j, d2 in enumerate(parsed_docs):
-                    if i == j: continue
-                    if d2['parent_id'] or d2['status'] == 'resolved' or d2['v_status'] == 'rejected': continue
-                    if d1['lat'] == 0 or d1['lon'] == 0 or d2['lat'] == 0 or d2['lon'] == 0: continue
+            patch_headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+            clustered_count = 0
 
-                    dist = calculate_distance(d1['lat'], d1['lon'], d2['lat'], d2['lon'])
-                    is_dup = False
-                    if d1['image_urls'] and d2['image_urls'] and any(u in d2['image_urls'] for u in d1['image_urls']):
-                        is_dup = True
-                    elif dist < 50:
-                        is_dup = True
-                    elif dist < 250 and d1['embedding'] and d2['embedding'] and len(d1['embedding']) == len(d2['embedding']):
-                        import numpy as np
-                        dot = np.dot(d1['embedding'], d2['embedding'])
-                        norm_a = np.linalg.norm(d1['embedding'])
-                        norm_b = np.linalg.norm(d2['embedding'])
-                        sim = dot / (norm_a * norm_b) if norm_a and norm_b else 0
-                        if sim >= 0.70: is_dup = True
+            for i, master in enumerate(parsed_docs):
+                if master['parent_id'] or master['status'] == 'resolved' or master['v_status'] == 'rejected':
+                    continue
 
-                    if is_dup:
-                        print(f"🔗 [Duplicate Scan] Linked {d2['doc_id']} ('{d2['title']}') -> Master {d1['doc_id']} ('{d1['title']}')")
-                        self.update_doc_fields(d2['doc_id'], {'parentId': d1['doc_id']})
-                        d2['parent_id'] = d1['doc_id']
+                master_id = master['doc_id']
+                child_ids = []
+
+                for j, candidate in enumerate(parsed_docs):
+                    if i == j or candidate['parent_id'] or candidate['status'] == 'resolved' or candidate['v_status'] == 'rejected':
+                        continue
+
+                    # RULE 1: Mandatory Category Match
+                    if master['norm_cat'] != candidate['norm_cat']:
+                        continue
+
+                    # RULE 2: Distance <= 25m
+                    if master['lat'] == 0 or master['lon'] == 0 or candidate['lat'] == 0 or candidate['lon'] == 0:
+                        continue
+                    dist = calculate_distance(master['lat'], master['lon'], candidate['lat'], candidate['lon'])
+                    if dist > 25.0:
+                        continue
+
+                    # RULE 3: Visual Proof Match (Exact Image URL OR CLIP Cosine Similarity >= 0.82)
+                    exact_match = master['image_urls'] and candidate['image_urls'] and any(u in candidate['image_urls'] for u in master['image_urls'])
+                    sim = 0.0
+                    if master['embedding'] and candidate['embedding'] and len(master['embedding']) == len(candidate['embedding']):
+                        dot = np.dot(master['embedding'], candidate['embedding'])
+                        norm_a = np.linalg.norm(master['embedding'])
+                        norm_b = np.linalg.norm(candidate['embedding'])
+                        sim = dot / (norm_a * norm_b) if norm_a and norm_b else 0.0
+
+                    if exact_match or (sim >= 0.82):
+                        child_id = candidate['doc_id']
+                        candidate['parent_id'] = master_id
+                        child_ids.append(child_id)
+                        clustered_count += 1
+                        print(f"🔗 [Startup Sweep] Linked duplicate {child_id} ('{candidate['title']}') -> Master {master_id} ('{master['title']}') [Cat: {master['norm_cat']}, Dist: {dist:.1f}m, Sim: {sim:.2f}]")
+                        
+                        patch_url = f"https://firestore.googleapis.com/v1/projects/{self.project_id}/databases/(default)/documents/complaints/{child_id}?updateMask.fieldPaths=parentId"
+                        requests.patch(patch_url, json={'fields': {'parentId': {'stringValue': master_id}}}, headers=patch_headers)
+
+                if child_ids:
+                    comb_severity = min(100, master['severity'] + (len(child_ids) * 5))
+                    patch_m_url = f"https://firestore.googleapis.com/v1/projects/{self.project_id}/databases/(default)/documents/complaints/{master_id}?updateMask.fieldPaths=combinedSeverity"
+                    requests.patch(patch_m_url, json={'fields': {'combinedSeverity': {'integerValue': str(comb_severity)}}}, headers=patch_headers)
+
+            print(f"✅ [Startup Sweep] Completed! Total duplicates linked: {clustered_count}. Shifting to Real-Time 3s Polling...")
+
         except Exception as e:
-            print(f"⚠️ Initial duplicate scan error: {e}")
+            print(f"⚠️ Startup sweep error: {e}")
 
     def start_loop(self):
         print("⚡ Real-time Firestore REST Worker active (Polling every 3s)...")
         time.sleep(2)
-        self.run_duplicate_scan()
+        self.run_full_initialization_and_clustering()
         while True:
             try:
                 self.poll_and_process()
