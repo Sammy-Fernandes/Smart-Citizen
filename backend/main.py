@@ -434,17 +434,17 @@ def on_broadcasts_snapshot(col_snapshot, changes, read_time):
 API_KEY = "AIzaSyC_J29mrAmjAFOoUos65aMnH3_itnRNOqE"
 PROJECT_ID = "civic-engagement-app-67289"
 
-def normalize_category(cat: str) -> str:
-    c = cat.lower().strip()
-    if any(k in c for k in ['garbage', 'trash', 'sanitation', 'litter', 'waste', 'dump', 'debris', 'bin']):
+def normalize_category(cat: str, title: str = '') -> str:
+    text = (str(cat) + ' ' + str(title)).lower().strip()
+    if any(k in text for k in ['garbage', 'trash', 'sanitation', 'litter', 'waste', 'dump', 'debris', 'bin']):
         return 'sanitation'
-    if any(k in c for k in ['water', 'drain', 'leak', 'sewage', 'pipe', 'flood']):
+    if any(k in text for k in ['water', 'drain', 'leak', 'sewage', 'pipe', 'flood']):
         return 'water'
-    if any(k in c for k in ['pothole', 'road', 'infrastructure', 'crack', 'asphalt', 'surface', 'safety']):
+    if any(k in text for k in ['pothole', 'road', 'infrastructure', 'crack', 'asphalt', 'surface']):
         return 'infrastructure'
-    if any(k in c for k in ['electric', 'light', 'lamp', 'wire', 'pole']):
+    if any(k in text for k in ['electric', 'light', 'lamp', 'wire', 'pole']):
         return 'electricity'
-    return c
+    return text
 
 class RealtimeRestWorker:
     def __init__(self, api_key: str, project_id: str):
@@ -591,7 +591,7 @@ class RealtimeRestWorker:
         url = f"https://firestore.googleapis.com/v1/projects/{self.project_id}/databases/(default)/documents/complaints"
         headers = {'Authorization': f'Bearer {token}'}
 
-        norm_cat = normalize_category(category)
+        norm_cat = normalize_category(category, title)
 
         try:
             r = requests.get(url, headers=headers, timeout=10)
@@ -617,7 +617,7 @@ class RealtimeRestWorker:
                 # RULE 1: Category Match
                 doc_title = fields.get('title', {}).get('stringValue', '')
                 doc_cat = fields.get('category', {}).get('stringValue', '')
-                doc_norm_cat = normalize_category(doc_cat if doc_cat else doc_title)
+                doc_norm_cat = normalize_category(doc_cat, doc_title)
                 if norm_cat != doc_norm_cat:
                     continue
 
@@ -724,7 +724,7 @@ class RealtimeRestWorker:
                 fields = doc.get('fields', {})
                 title = fields.get('title', {}).get('stringValue', '')
                 category = fields.get('category', {}).get('stringValue', '')
-                norm_cat = normalize_category(category if category else title)
+                norm_cat = normalize_category(category, title)
                 status = fields.get('status', {}).get('stringValue', '')
                 v_status = fields.get('verificationStatus', {}).get('stringValue', '')
                 rejection = fields.get('rejectionReason', {}).get('stringValue', None)
