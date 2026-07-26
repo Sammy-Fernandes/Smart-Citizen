@@ -434,14 +434,16 @@ def on_broadcasts_snapshot(col_snapshot, changes, read_time):
 API_KEY = "AIzaSyC_J29mrAmjAFOoUos65aMnH3_itnRNOqE"
 PROJECT_ID = "civic-engagement-app-67289"
 
-def normalize_category(cat: str, title: str = '') -> str:
-    text = (str(cat) + ' ' + str(title)).lower().strip()
+def normalize_category(cat: str, title: str = '', issues: str = '') -> str:
+    text = (str(cat) + ' ' + str(title) + ' ' + str(issues)).lower().strip()
+    if any(k in text for k in ['sewage', 'drain overflow', 'pipe leak', 'water overflow', 'flooding']):
+        return 'water:sewage'
     if any(k in text for k in ['garbage', 'trash', 'sanitation', 'litter', 'waste', 'dump', 'debris', 'bin']):
-        return 'sanitation'
+        return 'sanitation:solid'
     if any(k in text for k in ['water', 'drain', 'leak', 'sewage', 'pipe', 'flood']):
-        return 'water'
+        return 'water:supply'
     if any(k in text for k in ['pothole', 'road', 'infrastructure', 'crack', 'asphalt', 'surface']):
-        return 'infrastructure'
+        return 'infrastructure:road'
     if any(k in text for k in ['electric', 'light', 'lamp', 'wire', 'pole']):
         return 'electricity'
     return text
@@ -611,7 +613,7 @@ class RealtimeRestWorker:
 
                 status = fields.get('status', {}).get('stringValue', '')
                 v_status = fields.get('verificationStatus', {}).get('stringValue', '')
-                if status == 'rejected' or v_status == 'rejected' or 'rejectionReason' in fields:
+                if status == 'resolved' or status == 'rejected' or v_status == 'rejected' or 'rejectionReason' in fields:
                     continue
 
                 # RULE 1: Category Match
@@ -751,17 +753,29 @@ class RealtimeRestWorker:
             clustered_count = 0
 
             for i, master in enumerate(parsed_docs):
+                master_id = master['doc_id']
+
+                # CASCADING RESOLUTION CHECK: If Master is resolved, ensure all its linked children are also resolved
+                if master['status'] == 'resolved':
+                    for cand in parsed_docs:
+                        if cand.get('parent_id') == master_id and cand['status'] != 'resolved':
+                            print(f"🔄 [Cascading Resolution] Syncing child report {cand['doc_id']} ('{cand['title']}') -> resolved (Master {master_id} resolved)")
+                            cand['status'] = 'resolved'
+                            patch_res_url = f"https://firestore.googleapis.com/v1/projects/{self.project_id}/databases/(default)/documents/complaints/{cand['doc_id']}?updateMask.fieldPaths=status"
+                            requests.patch(patch_res_url, json={'fields': {'status': {'stringValue': 'resolved'}}}, headers=patch_headers)
+                    continue
+
                 if master['parent_id'] or master['status'] == 'rejected' or master['v_status'] == 'rejected' or master['rejection']:
                     continue
 
-                master_id = master['doc_id']
                 child_ids = []
+                child_severities = []
 
                 for j, candidate in enumerate(parsed_docs):
-                    if i == j or candidate['parent_id'] or candidate['status'] == 'rejected' or candidate['v_status'] == 'rejected' or candidate['rejection']:
+                    if i == j or candidate['parent_id'] or candidate['status'] == 'resolved' or candidate['status'] == 'rejected' or candidate['v_status'] == 'rejected' or candidate['rejection']:
                         continue
 
-                    # RULE 1: Mandatory Category Match
+                    # RULE 1: Mandatory Sub-Category Match
                     if master['norm_cat'] != candidate['norm_cat']:
                         continue
 
@@ -772,7 +786,7 @@ class RealtimeRestWorker:
                     if dist > 25.0:
                         continue
 
-                    # RULE 3: Exact Image Match OR Cosine Sim >= 0.78 OR Same Physical Spot (Dist <= 20m)
+                    # RULE 3: Exact Image Match OR Cosine Sim >= 0.82 OR Same Spot (Dist <= 20m)
                     exact_match = master['image_urls'] and candidate['image_urls'] and any(u in candidate['image_urls'] for u in master['image_urls'])
                     sim = 0.0
                     if master['embedding'] and candidate['embedding'] and len(master['embedding']) == len(candidate['embedding']):
@@ -781,12 +795,13 @@ class RealtimeRestWorker:
                         norm_b = np.linalg.norm(candidate['embedding'])
                         sim = dot / (norm_a * norm_b) if norm_a and norm_b else 0.0
 
-                    is_dup = exact_match or (sim >= 0.78) or (dist <= 20.0)
+                    is_dup = exact_match or (sim >= 0.82) or (dist <= 20.0)
 
                     if is_dup:
                         child_id = candidate['doc_id']
                         candidate['parent_id'] = master_id
                         child_ids.append(child_id)
+                        child_severities.append(candidate['severity'])
                         clustered_count += 1
                         print(f"🔗 [Startup Sweep] Linked duplicate {child_id} ('{candidate['title']}') -> Master {master_id} ('{master['title']}') [Cat: {master['norm_cat']}, Dist: {dist:.1f}m, Sim: {sim:.2f}]")
                         
@@ -794,7 +809,8 @@ class RealtimeRestWorker:
                         requests.patch(patch_url, json={'fields': {'parentId': {'stringValue': master_id}}}, headers=patch_headers)
 
                 if child_ids:
-                    comb_severity = min(100, master['severity'] + (len(child_ids) * 5))
+                    all_severities = [master['severity']] + child_severities
+                    comb_severity = min(100, max(all_severities) + min(20, len(child_ids) * 5))
                     patch_m_url = f"https://firestore.googleapis.com/v1/projects/{self.project_id}/databases/(default)/documents/complaints/{master_id}?updateMask.fieldPaths=combinedSeverity"
                     requests.patch(patch_m_url, json={'fields': {'combinedSeverity': {'integerValue': str(comb_severity)}}}, headers=patch_headers)
 

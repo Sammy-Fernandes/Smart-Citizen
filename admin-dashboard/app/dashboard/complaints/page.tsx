@@ -288,6 +288,23 @@ export default function ComplaintsPage() {
                 updatedAt: Timestamp.now()
             });
 
+            // Cascade resolution to all linked child duplicate complaints in cluster
+            const childQuery = query(collection(db, 'complaints'), where('parentId', '==', resolvingId));
+            const childSnap = await getDocs(childQuery);
+            const batchPromises = childSnap.docs.map(childDoc => 
+                updateDoc(doc(db, 'complaints', childDoc.id), {
+                    status: 'resolved',
+                    resolution: {
+                        note: `Resolved via Master Ticket (${complaint?.title || 'Cluster Resolution'})`,
+                        imageUrl: imageUrl,
+                        resolvedAt: Timestamp.now()
+                    },
+                    resolvedAt: Timestamp.now(),
+                    updatedAt: Timestamp.now()
+                })
+            );
+            await Promise.all(batchPromises);
+
             // 3. Create Broadcast
             await addDoc(collection(db, 'broadcasts'), {
                 title: `Issue Resolved: ${complaint?.title || 'Complaint'}`,
@@ -652,8 +669,10 @@ export default function ComplaintsPage() {
                                     // 2. Otherwise, we have a cluster of 2 or more related reports
                                     const style = getClusterStyle(rootId);
                                     const rootComplaint = complaints.find(x => x.id === rootId);
-                                    const clusterTitle = rootComplaint?.title || groupComplaints[0].title || "Incident Cluster";
-                                    const combinedSeverity = rootComplaint?.combinedSeverity || groupComplaints.find(x => x.combinedSeverity)?.combinedSeverity || null;
+                                    const maxReportSeverity = Math.max(...groupComplaints.map(x => Number(x.severityScore || 0)));
+                                    const calcCombined = Math.min(100, maxReportSeverity + Math.min(20, (groupComplaints.length - 1) * 5));
+                                    const storedCombined = rootComplaint?.combinedSeverity ? Number(rootComplaint.combinedSeverity) : null;
+                                    const combinedSeverity = storedCombined ? Math.max(storedCombined, maxReportSeverity) : calcCombined;
 
                                     // Cluster Header
                                     finalRows.push(
