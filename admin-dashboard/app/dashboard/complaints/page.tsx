@@ -669,6 +669,7 @@ export default function ComplaintsPage() {
                                     // 2. Otherwise, we have a cluster of 2 or more related reports
                                     const style = getClusterStyle(rootId);
                                     const rootComplaint = complaints.find(x => x.id === rootId);
+                                    const clusterTitle = rootComplaint?.title || groupComplaints[0]?.title || "Incident Cluster";
                                     const maxReportSeverity = Math.max(...groupComplaints.map(x => Number(x.severityScore || 0)));
                                     const calcCombined = Math.min(100, maxReportSeverity + Math.min(20, (groupComplaints.length - 1) * 5));
                                     const storedCombined = rootComplaint?.combinedSeverity ? Number(rootComplaint.combinedSeverity) : null;
